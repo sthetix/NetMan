@@ -16,7 +16,7 @@ include ./Versions.inc
 # Directories and Output
 ################################################################################
 
-TARGET := HATSIFY
+TARGET := NetMan
 BUILDDIR := build
 OUTPUTDIR := output
 SOURCEDIR := hatsify
@@ -30,7 +30,7 @@ VPATH += $(dir $(wildcard ./$(BDKDIR)/ianos/elfload/))
 OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
     start.o exception_handlers.o \
     main.o heap.o \
-    gfx.o tui.o config.o \
+    gfx.o tui.o screenshot.o config.o \
 )
 
 # Hardware.
@@ -46,7 +46,7 @@ OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
 
 # Utilities.
 OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
-    btn.o ini.o sprintf.o util.o \
+    btn.o touch.o ini.o sprintf.o util.o \
 )
 
 # Libraries.
@@ -115,9 +115,9 @@ $(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf
 
 $(BUILDDIR)/$(TARGET)/$(TARGET).elf: $(OBJS)
 	$(CC) $(LDFLAGS) -T $(SOURCEDIR)/link.ld $^ -o $@
-	@echo "HATSIFY was built with the following flags:\nCFLAGS:  "$(CFLAGS)"\nLDFLAGS: "$(LDFLAGS)
+	@echo "NetMan was built with the following flags:\nCFLAGS:  "$(CFLAGS)"\nLDFLAGS: "$(LDFLAGS)
 
-$(shell mkdir -p build/HATSIFY/lv_core build/HATSIFY/lv_draw build/HATSIFY/lv_fonts build/HATSIFY/lv_hal build/HATSIFY/lv_misc build/HATSIFY/lv_objx build/HATSIFY/lv_themes build/HATSIFY/ianos/elfload)
+$(shell mkdir -p build/NetMan/lv_core build/NetMan/lv_draw build/NetMan/lv_fonts build/NetMan/lv_hal build/NetMan/lv_misc build/NetMan/lv_objx build/NetMan/lv_themes build/NetMan/ianos/elfload)
 
 $(BUILDDIR)/$(TARGET)/%.o: %.c
 	@echo Building $@

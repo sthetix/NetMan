@@ -1,13 +1,13 @@
-# HATSIFY v1.0.0
+# NetMan v1.0.0
 
 **A simple Nintendo Switch network configuration tool for managing online/offline modes.**
 
-HATSIFY helps you easily switch between different network configurations on your Nintendo Switch, allowing you to control when your sysMMC or emuMMC can connect to Nintendo's servers.
+NetMan helps you easily switch between different network configurations on your Nintendo Switch, allowing you to control when your sysMMC or emuMMC can connect to Nintendo's servers.
 
 <div align="center">
-  <img src="images/hatsify.jpg" alt="HATSIFY Interface" width="50%">
+  <img src="images/netman.jpg" alt="NetMan Interface" width="50%">
   <br>
-  <em>HATSIFY's clean and intuitive interface</em>
+  <em>NetMan's clean and intuitive interface</em>
 </div>
 
 ## 🌟 Features
@@ -46,14 +46,14 @@ HATSIFY helps you easily switch between different network configurations on your
 
 ## 🚀 Installation
 
-1. **Download** the latest `hatsify.bin` from [Releases](https://github.com/sthetix/HATSIFY/releases)
+1. **Download** the latest `netman.bin` from [Releases](https://github.com/sthetix/NetMan/releases)
 2. **Copy** the file to your SD card bootloader/payloads folder
-3. **Launch** Hekate, select Payloads, and choose HATSIFY.bin
+3. **Launch** Hekate, select Payloads, and choose NetMan.bin
 4. **Navigate** the menu using the console Volume UP / Down and Power button
 
 ## 📖 How to Use
 
-1. **Launch HATSIFY** from Hekate payloads menu
+1. **Launch NetMan** from Hekate payloads menu
 2. **Choose** your desired network mode from the menu
 3. **Read the warnings** carefully for risky modes
 4. **Confirm** your selection when prompted
@@ -63,7 +63,7 @@ The tool will automatically configure all necessary files for your chosen mode.
 
 ## ⚙️ What It Does
 
-HATSIFY modifies these configuration files on your SD card:
+NetMan modifies these configuration files on your SD card:
 - `exosphere.ini` - Controls console identifier blanking
 - `atmosphere/hosts/default.txt` - DNS blocking rules  
 - `atmosphere/hosts/sysmmc.txt` - sysMMC-specific DNS rules
@@ -88,7 +88,7 @@ HATSIFY modifies these configuration files on your SD card:
 
 ## 💾 Building from Source
 
-If you want to compile HATSIFY yourself:
+If you want to compile NetMan yourself:
 
 ```bash
 # Make sure you have devkitPro and devkitA64 installed
@@ -96,11 +96,11 @@ make clean
 make
 ```
 
-The compiled `hatsify.bin` will be in the `output/` directory.
+The compiled `netman.bin` will be in the `output/` directory.
 
 ## 🤝 Contributing
 
-Found a bug or want to improve HATSIFY? Contributions are welcome!
+Found a bug or want to improve NetMan? Contributions are welcome!
 
 1. Fork this repository
 2. Create your feature branch (`git checkout -b feature/improvement`)
@@ -121,7 +121,7 @@ This project is licensed under the GNU General Public License v2.0 - see the [LI
 
 ## 📞 Support
 
-- **Issues**: Report bugs or request features in [GitHub Issues](https://github.com/sthetix/HATSIFY/issues)
+- **Issues**: Report bugs or request features in [GitHub Issues](https://github.com/sthetix/NetMan/issues)
 - **Community**: Join discussions in Nintendo Switch homebrew communities
 - **Updates**: Watch this repository for new releases and improvements
 
@@ -135,4 +135,4 @@ If you find this project useful, please consider supporting me by buying me a co
   <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" >
 </a>
 
-**Remember: With great power comes great responsibility. Use HATSIFY wisely! 🎮**
+**Remember: With great power comes great responsibility. Use NetMan wisely! 🎮**

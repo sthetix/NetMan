@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 HATSIFY
+ * Copyright (c) 2025 NetMan
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -803,7 +803,7 @@ ment_t ment_top[] = {
     MDEF_END()
 };
 
-menu_t menu_top = { ment_top, "HATSIFY v1.0.0", 0, 0 };
+menu_t menu_top = { ment_top, "NetMan v1.0.0", 0, 0 };
 
 extern void pivot_stack(u32 stack_top);
 

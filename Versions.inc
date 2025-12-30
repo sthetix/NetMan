@@ -1,4 +1,4 @@
-# Versions.inc for HATSIFY
+# Versions.inc for NetMan
 
 BLVERSION_MAJOR = 1
 BLVERSION_MINOR = 0

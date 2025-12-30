@@ -18,7 +18,9 @@
 #include <bdk.h>
 
 #include "tui.h"
+#include "screenshot.h"
 #include "../config.h"
+#include <input/touch.h>
 
 extern hekate_config h_cfg;
 
@@ -94,6 +96,11 @@ void *tui_do_menu(menu_t *menu)
 	gfx_clear_partial_grey(0x1B, 0, 1256);
 	tui_sbar(true);
 
+	// Initialize touchscreen for 3-finger screenshot support
+	touch_power_on();
+
+	u32 btn_last = btn_read();
+
 	while (true)
 	{
 		gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
@@ -143,15 +150,64 @@ void *tui_do_menu(menu_t *menu)
 		gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
 		gfx_putc('\n');
 
-	
+
 		// Print errors, help and battery status.
 		gfx_con_setpos(0, 1191);
-		gfx_printf("%k VOL: Move up/down\n PWR: Select option%k", 0xFF555555, 0xFFCCCCCC);
+		gfx_printf("%k VOL: Move | PWR: Select | 3Fngr: Screenshot%k", 0xFF555555, 0xFFCCCCCC);
 
 		display_backlight_brightness(h_cfg.backlight, 1000);
 
-		// Wait for user command.
-		u32 btn = btn_wait();
+		// Poll for touch events (non-blocking)
+		touch_event touch = {0};
+		touch_poll(&touch);
+
+		// Check for 3-finger touch screenshot
+		if (touch.touch && touch.fingers >= 3)
+		{
+			// Wait for touch release to avoid multiple screenshots
+			msleep(100);
+
+			int res = save_fb_to_bmp();
+
+			// Show centered notification (move up one line from legends at 1191)
+			gfx_clear_partial_grey(0x1B, 1100, 80);
+
+			if (!res) {
+				// "Screenshot taken!" = 18 chars * 16px = 288px width
+				// Center: (720 - 288) / 2 = 216px
+				gfx_con_setpos(216, 1150);
+				gfx_printf("%kScreenshot taken!%k", 0xFF00FF00, 0xFFCCCCCC);
+			} else {
+				// "Screenshot failed!" = 19 chars * 16px = 304px width
+				// Center: (720 - 304) / 2 = 208px
+				gfx_con_setpos(208, 1150);
+				gfx_printf("%kScreenshot failed!%k", 0xFFFF0000, 0xFFCCCCCC);
+			}
+			msleep(1000);
+
+			gfx_clear_partial_grey(0x1B, 0, 1256);
+			btn_last = btn_read();
+			continue;
+		}
+
+		// Non-blocking button read
+		u32 btn = btn_read();
+
+		// Only process button presses (ignore button releases and repeats)
+		if (btn == btn_last)
+		{
+			msleep(10);
+			continue;
+		}
+
+		btn_last = btn;
+
+		// Ignore button releases (when btn becomes 0)
+		if (!btn)
+		{
+			msleep(10);
+			continue;
+		}
 
 		if (btn & BTN_VOL_DOWN && idx < (cnt - 1))
 			idx++;
