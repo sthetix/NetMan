@@ -19,7 +19,7 @@ include ./Versions.inc
 TARGET := NetMan
 BUILDDIR := build
 OUTPUTDIR := output
-SOURCEDIR := hatsify
+SOURCEDIR := netman
 BDKDIR := bdk
 BDKINC := -I./$(BDKDIR)
 VPATH = $(dir ./$(SOURCEDIR)/) $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*/))
