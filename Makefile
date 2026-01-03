@@ -19,6 +19,7 @@ include ./Versions.inc
 TARGET := NetMan
 BUILDDIR := build
 OUTPUTDIR := output
+DISTDIR := dist
 SOURCEDIR := netman
 BDKDIR := bdk
 BDKINC := -I./$(BDKDIR)
@@ -93,7 +94,9 @@ LDFLAGS = $(ARCH) -nostartfiles -lgcc -Wl,--nmagic,--gc-sections -Xlinker --defs
 # Build Rules
 ################################################################################
 
-.PHONY: all clean
+.PHONY: all clean dist zip help
+
+.DEFAULT_GOAL := all
 
 all: $(TARGET).bin
 	@echo "--------------------------------------"
@@ -105,9 +108,41 @@ all: $(TARGET).bin
 	@echo "--------------------------------------"
 
 clean:
-	@rm -rf $(OBJS)
+	@echo "Cleaning build artifacts..."
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(OUTPUTDIR)
+	@rm -rf $(DISTDIR)
+	@echo "Clean complete."
+
+dist: $(TARGET).bin
+	@echo "Creating distribution package..."
+	@mkdir -p $(DISTDIR)/bootloader/payloads
+	@cp $(OUTPUTDIR)/$(TARGET).bin $(DISTDIR)/bootloader/payloads/
+	@echo "Distribution structure created in $(DISTDIR)/"
+
+zip: dist
+	@echo "Creating release archive..."
+	@cd $(DISTDIR) && zip -r ../$(TARGET).zip bootloader/
+	@echo "--------------------------------------"
+	@echo "Release package created: $(TARGET).zip"
+	@echo "Contents: bootloader/payloads/$(TARGET).bin"
+	@echo "--------------------------------------"
+
+help:
+	@echo "NetMan Build System"
+	@echo "==================="
+	@echo ""
+	@echo "Available targets:"
+	@echo "  all     - Build the payload binary (default)"
+	@echo "  clean   - Remove all build artifacts"
+	@echo "  dist    - Create distribution directory structure"
+	@echo "  zip     - Create release zip file with proper structure"
+	@echo "  help    - Display this help message"
+	@echo ""
+	@echo "Output:"
+	@echo "  Binary:  $(OUTPUTDIR)/$(TARGET).bin"
+	@echo "  Archive: $(TARGET).zip"
+	@echo ""
 
 $(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf
 	@mkdir -p $(OUTPUTDIR)

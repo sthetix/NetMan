@@ -1,5 +1,36 @@
+# Build artifacts
 *.o
+*.elf
 *.bin
-build/
-claude.
+*.a
+*.so
+*.exe
 
+# Build directories
+build/
+output/
+dist/
+
+# Distribution files
+*.zip
+
+# Editor and IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Debug files
+*.log
+*.map
+
+# Temporary files
+tmp/
+temp/
