@@ -62,7 +62,7 @@ TOOLS := $(TOOLSLZ) $(TOOLSB2C)
 
 ################################################################################
 
-.PHONY: all clean $(LDRDIR) $(TOOLS)
+.PHONY: all clean release $(LDRDIR) $(TOOLS)
 
 all: $(OUTPUTDIR)/$(TARGET).bin $(LDRDIR)
 	@echo "--------------------------------------"
@@ -91,10 +91,10 @@ $(LDRDIR): $(OUTPUTDIR)/$(TARGET).bin
 	@$(TOOLSB2C)/bin2c payload_01 > $(LDRDIR)/payload_01.h
 	@rm payload_00
 	@rm payload_01
-	@$(MAKE) --no-print-directory -C $@ $(MAKECMDGOALS) -$(MAKEFLAGS) PAYLOAD_NAME=$(TARGET)
+	@$(MAKE) --no-print-directory -C $@ $(if $(filter release,$(MAKECMDGOALS)),all,$(MAKECMDGOALS)) -$(MAKEFLAGS) PAYLOAD_NAME=$(TARGET)
 
 $(TOOLS):
-	@$(MAKE) --no-print-directory -C $@ $(MAKECMDGOALS) -$(MAKEFLAGS)
+	@$(MAKE) --no-print-directory -C $@ $(if $(filter release,$(MAKECMDGOALS)),all,$(MAKECMDGOALS)) -$(MAKEFLAGS)
 
 $(OUTPUTDIR)/$(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf $(TOOLS)
 	@mkdir -p "$(@D)"
@@ -128,3 +128,19 @@ $(BUILDDIR)/$(TARGET)/%.o: $(BDKDIR)/%.S
 	@mkdir -p "$(@D)"
 	@echo Building $@
 	@$(CC) $(CFLAGS) -c $< -o $@
+
+release: $(OUTPUTDIR)/$(TARGET).bin
+	@echo "--------------------------------------"
+	@echo "Uncompr size: "
+	@$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET).bin))
+	@echo $(BIN_SIZE)" Bytes"
+	@echo "Payload Max:  126296 Bytes"
+	@if [ ${BIN_SIZE} -gt 126296 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
+	@echo "--------------------------------------"
+	@echo "Creating release package..."
+	@mkdir -p bootloader/payloads
+	@mkdir -p Releases
+	@cp $(OUTPUTDIR)/$(TARGET).bin bootloader/payloads/$(TARGET).bin
+	@zip -q -r Releases/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip bootloader
+	@echo "Release created: Releases/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip"
+	@echo "Payload copied to: bootloader/payloads/$(TARGET).bin"
