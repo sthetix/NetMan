@@ -294,17 +294,19 @@ void launch_hekate()
 
 void dump_sysnand()
 {
+	bool prev_force_disable = h_cfg.emummc_force_disable;
 	h_cfg.emummc_force_disable = true;
 	emu_cfg.enabled = false;
 	dump_keys();
+	h_cfg.emummc_force_disable = prev_force_disable;
 }
 
 void dump_emunand()
 {
-	if (h_cfg.emummc_force_disable)
-		return;
+	bool prev_enabled = emu_cfg.enabled;
 	emu_cfg.enabled = true;
 	dump_keys();
+	emu_cfg.enabled = prev_enabled;
 }
 
 void dump_amiibo_keys()
