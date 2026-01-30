@@ -75,6 +75,7 @@ typedef u32 uptr;
 #define COLOR_GREY_DM    0xFF444444  // Hekate darker grey (TXT_CLR_GREY_DM)
 #define COLOR_GREY_D     0xFF303030  // Hekate darkest grey (TXT_CLR_GREY_D)
 
+// Rotating colors for rainbow effect - creates visual distinction between operations
 static const u32 colors[6] = {COLOR_CYAN_L, COLOR_TURQUOISE, COLOR_GREENISH, COLOR_SOFT_WHITE, COLOR_ORANGE, COLOR_WHITE};
 
 /* Important */

@@ -26,6 +26,9 @@
 .extern _irq_setup
 .type _irq_setup, %function
 
+.globl __end__
+__end__:
+
 .globl _start
 .type _start, %function
 _start:

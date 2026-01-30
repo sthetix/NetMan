@@ -16,12 +16,16 @@
  */
 
 #include <display/di.h>
+#include "gfx.h"
 #include "tui.h"
 #include "../config.h"
 #include <power/max17050.h>
 #include <utils/btn.h>
+#include <input/touch.h>
 #include <utils/util.h>
+#include <utils/sprintf.h>
 #include <libs/fatfs/ff.h>
+#include <string.h>
 
 extern hekate_config h_cfg;
 
@@ -40,26 +44,25 @@ void tui_sbar(bool force_update)
 	sbar_time_keeping = get_tmr_s();
 
 	u32 battPercent = 0;
-	int battVoltCurr = 0;
 
 	gfx_con_getpos(&cx, &cy);
-	gfx_con_setpos(0,  1260);
+	gfx_con_setpos(1050, 704); // Right side of bottom bar, aligned with legend (y=704)
 
 	max17050_get_property(MAX17050_RepSOC, (int *)&battPercent);
-	max17050_get_property(MAX17050_VCELL, &battVoltCurr);
 
-	gfx_clear_partial_grey(0x30, 1256, 24);
-	gfx_printf("%K%k Battery: %d.%d%% (%d mV) - Charge:", 0xFF303030, 0xFF888888,
-		(battPercent >> 8) & 0xFF, (battPercent & 0xFF) / 26, battVoltCurr);
+	// Save graphics state before drawing battery info with white background
+	u8 saved_fillbg = gfx_con.fillbg;
+	u32 saved_bgcol = gfx_con.bgcol;
 
-	max17050_get_property(MAX17050_Current, &battVoltCurr);
+	// RepSOC: upper byte = integer percentage (0-100), lower byte = fractional (1/256)
+	// Cyan text on dark grey background
+	gfx_printf("%K%k Batt: %d%%", 0xFF3D3D3D, 0xFF00D8FF,
+		battPercent >> 8);
 
-	if (battVoltCurr >= 0)
-		gfx_printf(" %k+%d mA%k%K\n",
-			0xFF008800, battVoltCurr / 1000, 0xFFCCCCCC, 0xFF1B1B1B);
-	else
-		gfx_printf(" %k-%d mA%k%K\n",
-			0xFF880000, (~battVoltCurr) / 1000, 0xFFCCCCCC, 0xFF1B1B1B);
+	// Restore graphics state to prevent white background from leaking to subsequent text
+	gfx_con.fillbg = saved_fillbg;
+	gfx_con.bgcol = saved_bgcol;
+
 	gfx_con.fntsz = prevFontSize;
 	gfx_con_setpos(cx, cy);
 }
@@ -74,15 +77,19 @@ void tui_pbar(int x, int y, u32 val, u32 fgcol, u32 bgcol)
 
 	gfx_con_setpos(x, y);
 
-	gfx_printf("%k[%3d%%]%k", fgcol, val, 0xFFCCCCCC);
+	// Only show progress for intermediate values, not 100% (completion)
+	if (val < 100)
+		gfx_printf("%k[%3d%%]%k", fgcol, val, 0xFFCCCCCC);
+	else
+		gfx_printf("%k%k", 0xFFCCCCCC, 0xFFCCCCCC); // Reset color even at 100%
 
-	x += 7 * gfx_con.fntsz;
-
-	for (u32 i = 0; i < (gfx_con.fntsz >> 3) * 6; i++)
-	{
-		gfx_line(x, y + i + 1, x + 3 * val, y + i + 1, fgcol);
-		gfx_line(x + 3 * val, y + i + 1, x + 3 * 100, y + i + 1, bgcol);
-	}
+	// Progress bar drawing disabled for landscape - gfx_line needs rework
+	// x += 7 * gfx_con.fntsz;
+	// for (u32 i = 0; i < (gfx_con.fntsz >> 3) * 4; i++)
+	// {
+	// 	gfx_line(x, y + i + 1, x + 2 * val, y + i + 1, fgcol);
+	// 	gfx_line(x + 2 * val, y + i + 1, x + 2 * 100, y + i + 1, bgcol);
+	// }
 
 	gfx_con_setpos(cx, cy);
 
@@ -92,19 +99,20 @@ void tui_pbar(int x, int y, u32 val, u32 fgcol, u32 bgcol)
 
 void *tui_do_menu(menu_t *menu)
 {
-	int idx = 0, prev_idx = 0, cnt = 0x7FFFFFFF;
+	int idx = 0, prev_idx = -1, cnt = 0x7FFFFFFF;
+	int need_full_redraw = 1; // Force initial full redraw
+	int last_drawn_idx = -1; // Track last drawn selection
 
-	gfx_clear_partial_grey(0x1B, 0, 1256);
+	gfx_clear_grey(0x1B); // Clear full screen initially
+
 	tui_sbar(true);
+
+	// Initialize button state tracking
+	u32 btn_last = 0; // Start fresh - any button press will trigger
 
 	while (true)
 	{
-		gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
-		gfx_con_setpos(menu->x, menu->y);
-		gfx_printf("[%kLockpick RCM Pro%k v%d.%d.%d%k]\n\n",
-			COLOR_WHITE, COLOR_WHITE, LP_VER_MJ, LP_VER_MN, LP_VER_BF, COLOR_SOFT_WHITE);
-
-		// Skip caption or seperator lines selection.
+		// Skip caption or separator lines selection.
 		while (menu->ents[idx].type == MENT_CAPTION ||
 			menu->ents[idx].type == MENT_CHGLINE)
 		{
@@ -127,63 +135,146 @@ void *tui_do_menu(menu_t *menu)
 				}
 			}
 		}
-		prev_idx = idx;
 
-		// Draw the menu.
-		for (cnt = 0; menu->ents[cnt].type != MENT_END; cnt++)
+		// Check if selection changed
+		if (idx != prev_idx)
 		{
-			if (cnt == idx)
-				gfx_con_setcol(0xFF1B1B1B, 1, 0xFFCCCCCC);
-			else
-				gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
-			if (menu->ents[cnt].type != MENT_CHGLINE)
-			{
-				if (cnt == idx)
-					gfx_printf(" %s", menu->ents[cnt].caption);
-				else
-					gfx_printf("%k %s", menu->ents[cnt].color, menu->ents[cnt].caption);
-			}
-			if(menu->ents[cnt].type == MENT_MENU)
-				gfx_printf("%k...", 0xFF0099EE);
-			gfx_printf(" \n");
+			prev_idx = idx;
 		}
-		gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
-		gfx_putc('\n');
 
-		// Print help and battery status.
-		gfx_con_setpos(0,  1127);
-		if (h_cfg.emummc_force_disable)
-			gfx_printf("%kNo emuMMC config found.\n", COLOR_RED_D);
-		gfx_con_setpos(0,  1191);
-		gfx_printf("%k VOL: Move | PWR: Select | VOL+-: Screenshot%k", COLOR_GREY_M, COLOR_SOFT_WHITE);
+		// Handle full redraw (initial or after handler)
+		if (need_full_redraw)
+		{
+			need_full_redraw = 0;
+
+			// Clear screen
+			gfx_clear_grey(0x1B);
+
+			// Draw title bar and bottom bar
+			char title[64];
+			s_printf(title, "[Lockpick RCM Pro v%d.%d.%d]", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
+			gfx_draw_title_bar(title);
+			gfx_draw_bottom_bar("VOL: Move   POWER: Select   Hold VOL+: Screenshot");
+
+			// Draw all menu items (use global UI settings)
+			u32 start_x = UI_MENU_START_X;
+			u32 start_y = UI_MENU_START_Y;
+
+			for (cnt = 0; menu->ents[cnt].type != MENT_END; cnt++)
+			{
+				gfx_con_setpos(start_x, start_y + (cnt * 24));
+
+				if (cnt == idx)
+					gfx_con_setcol(0xFF1B1B1B, 1, 0xFFCCCCCC);
+				else
+					gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
+
+				if (menu->ents[cnt].type != MENT_CHGLINE)
+				{
+					if (cnt == idx)
+						gfx_printf(" %s", menu->ents[cnt].caption);
+					else
+						gfx_printf("%k %s", menu->ents[cnt].color, menu->ents[cnt].caption);
+				}
+
+				if(menu->ents[cnt].type == MENT_MENU)
+					gfx_printf("%k...", 0xFF0099EE);
+			}
+
+			last_drawn_idx = idx;
+
+			// Force initial battery status display
+			tui_sbar(true);
+		}
+		// Handle cursor movement - only redraw changed items (TegraExplorer style)
+		else if (idx != last_drawn_idx)
+		{
+			u32 start_x = UI_MENU_START_X;
+			u32 start_y = UI_MENU_START_Y;  // Use global UI settings
+
+			// Redraw old selection (unhighlight)
+			if (last_drawn_idx >= 0 && menu->ents[last_drawn_idx].type != MENT_CHGLINE)
+			{
+				gfx_con_setpos(start_x, start_y + (last_drawn_idx * 24));
+				gfx_con_setcol(0xFF1B1B1B, 1, 0xFF1B1B1B); // Clear with background color
+				gfx_printf("             "); // Clear with spaces
+				gfx_con_setpos(start_x, start_y + (last_drawn_idx * 24));
+				gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
+				gfx_printf("%k %s", menu->ents[last_drawn_idx].color, menu->ents[last_drawn_idx].caption);
+				if(menu->ents[last_drawn_idx].type == MENT_MENU)
+					gfx_printf("%k...", 0xFF0099EE);
+			}
+
+			// Redraw new selection (highlight)
+			if (menu->ents[idx].type != MENT_CHGLINE)
+			{
+				gfx_con_setpos(start_x, start_y + (idx * 24));
+				gfx_con_setcol(0xFF1B1B1B, 1, 0xFF1B1B1B); // Clear with background color
+				gfx_printf("             "); // Clear with spaces
+				gfx_con_setpos(start_x, start_y + (idx * 24));
+				gfx_con_setcol(0xFF1B1B1B, 1, 0xFFCCCCCC);
+				gfx_printf(" %s", menu->ents[idx].caption);
+				if(menu->ents[idx].type == MENT_MENU)
+					gfx_printf("%k...", 0xFF0099EE);
+			}
+
+			gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
+			last_drawn_idx = idx;
+		}
 
 		display_backlight_brightness(h_cfg.backlight, 1000);
 
-		// Wait for user command.
-		u32 btn = btn_wait();
+		// Non-blocking button read
+		u32 btn = btn_read();
 
-		// Check for VOL+ and VOL- pressed together for screenshot
-		if (btn == (BTN_VOL_UP | BTN_VOL_DOWN))
+		// Only process button presses (ignore button releases and repeats)
+		if (btn == btn_last)
 		{
-			// Create screenshot directory if it doesn't exist
-			f_mkdir("sd:/switch");
-			f_mkdir("sd:/switch/screenshot");
+			// Still check for VOL+ hold (1 second) for screenshot
+			static u32 vol_press_start = 0;
+			if (btn & BTN_VOL_UP)
+			{
+				if (vol_press_start == 0)
+					vol_press_start = get_tmr_ms();
+				else if (get_tmr_ms() - vol_press_start > 1000)
+				{
+					// Button held for 1 second - take screenshot
+					vol_press_start = 0;
+					btn_last = 0; // Reset to allow next button press
 
-			int save_fb_to_bmp();
-			int res = save_fb_to_bmp();
-			u32 cx, cy;
-			gfx_con_getpos(&cx, &cy);
-			gfx_con_setpos(0, 1191);
-			if (!res) {
-				gfx_printf("%kScreenshot saved to sd:/switch/screenshot/%k           ", COLOR_CYAN_L, COLOR_SOFT_WHITE);
-			} else {
-				gfx_printf("%kScreenshot failed!%k                                     ", COLOR_ERROR, COLOR_SOFT_WHITE);
+					f_mkdir("sd:/switch");
+					f_mkdir("sd:/switch/screenshot");
+
+					int save_fb_to_bmp();
+					int res = save_fb_to_bmp();
+
+					gfx_con_setpos(UI_NOTIFY_X, UI_NOTIFY_Y);
+					if (!res) {
+						gfx_printf("%kScreenshot saved!%k                              ", COLOR_CYAN_L, COLOR_SOFT_WHITE);
+					} else {
+						gfx_printf("%kScreenshot failed!%k                             ", COLOR_ERROR, COLOR_SOFT_WHITE);
+					}
+					msleep(1000);
+
+					need_full_redraw = 1;
+					continue;
+				}
 			}
-			msleep(2000);
-			gfx_con_setpos(0, 1191);
-			gfx_printf("%k  VOL: Move  |  PWR: Select  |  VOL+&-: Screenshot%k", COLOR_GREY_M, COLOR_SOFT_WHITE);
-			gfx_con_setpos(cx, cy);
-			gfx_clear_partial_grey(0x1B, 0, 1256);
+			else
+			{
+				vol_press_start = 0;
+			}
+
+			msleep(10);
+			continue;
+		}
+
+		btn_last = btn;
+
+		// Ignore button releases (when btn becomes 0)
+		if (!btn)
+		{
+			msleep(10);
 			continue;
 		}
 
@@ -194,7 +285,7 @@ void *tui_do_menu(menu_t *menu)
 			idx = 0;
 			prev_idx = -1;
 		}
-		if (btn & BTN_VOL_UP && idx > 0)
+		else if (btn & BTN_VOL_UP && idx > 0)
 			idx--;
 		else if (btn & BTN_VOL_UP && idx == 0)
 		{
@@ -208,26 +299,39 @@ void *tui_do_menu(menu_t *menu)
 			{
 			case MENT_HANDLER:
 				ent->handler(ent->data);
+				need_full_redraw = 1; // Full redraw needed after handler clears screen
+				// Wait for all buttons to be released to prevent double-trigger
+				while (btn_read()) msleep(10);
+				btn_last = 0;
 				break;
 			case MENT_MENU:
-				return tui_do_menu(ent->menu);
-				break;
+				{
+					void *result = tui_do_menu(ent->menu);
+					// Clear full screen after returning from sub-menu
+					gfx_clear_grey(0x1B);
+					// Wait for all buttons to be released to prevent double-trigger
+					while (btn_read()) msleep(10);
+					btn_last = 0;
+					return result;
+				}
 			case MENT_DATA:
 				return ent->data;
-				break;
 			case MENT_BACK:
 				return NULL;
-				break;
 			case MENT_HDLR_RE:
 				ent->handler(ent);
+				need_full_redraw = 1; // Full redraw needed after handler clears screen
 				if (!ent->data)
 					return NULL;
+				// Wait for all buttons to be released to prevent double-trigger
+				while (btn_read()) msleep(10);
+				btn_last = 0;
 				break;
 			default:
 				break;
 			}
 			gfx_con.fntsz = 16;
-			gfx_clear_partial_grey(0x1B, 0, 1256);
+			need_full_redraw = 1; // Full redraw after handler
 		}
 		tui_sbar(false);
 	}

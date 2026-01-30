@@ -25,13 +25,13 @@
 
 #define TPRINTF(text) \
     end_time = get_tmr_us(); \
-    gfx_printf(text" done in %d us\n", end_time - start_time); \
+    gfx_printf(text" OK\n"); \
     start_time = get_tmr_us(); \
     minerva_periodic_training()
 
 #define TPRINTFARGS(text, args...) \
     end_time = get_tmr_us(); \
-    gfx_printf(text" done in %d us\n", args, end_time - start_time); \
+    gfx_printf(text" OK\n", args); \
     start_time = get_tmr_us(); \
     minerva_periodic_training()
 

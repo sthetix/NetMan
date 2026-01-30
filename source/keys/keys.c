@@ -25,8 +25,10 @@
 #include <display/di.h>
 #include "../frontend/gui.h"
 #include <gfx_utils.h>
+#include "../gfx/gfx.h"
 #include "../gfx/tui.h"
 #include "../hos/hos.h"
+#include <input/touch.h>
 #include <libs/fatfs/ff.h>
 #include <libs/nx_savedata/header.h>
 #include <libs/nx_savedata/save.h>
@@ -246,12 +248,15 @@ static bool _count_ticket_records(u32 buf_size, titlekey_buffer_t *titlekey_buff
     return false;
 }
 
-static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, titlekey_buffer_t *titlekey_buffer, eticket_rsa_keypair_t *rsa_keypair) {
+static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, titlekey_buffer_t *titlekey_buffer, eticket_rsa_keypair_t *rsa_keypair, u32 *elapsed_us) {
+    u32 step_time = get_tmr_us();
     FIL fp;
     u64 br = buf_size;
     u64 offset = 0;
     u32 file_tkey_count = 0;
-    u32 save_x = gfx_con.x, save_y = gfx_con.y;
+    // Convert internal coordinates to external for landscape mode (what tui_pbar expects)
+    u32 save_x = 1279 - gfx_con.y;  // External x (left margin position)
+    u32 save_y = gfx_con.x;           // External y (current line position)
     bool is_personalized = rsa_keypair != NULL;
     const char ticket_bin_path[32] = "/ticket.bin";
     const char ticket_list_bin_path[32] = "/ticket_list.bin";
@@ -260,24 +265,16 @@ static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, title
 
     if (is_personalized) {
         titlekey_save_path[25] = '2';
-        gfx_printf("\n%kPersonalized... ", colors[color_idx % 6]);
-    } else {
-        gfx_printf("\n%kCommon...       ", colors[color_idx % 6]);
     }
 
     if (f_open(&fp, titlekey_save_path, FA_READ | FA_OPEN_EXISTING)) {
-        EPRINTF("Unable to open e1 save. Skipping.");
         return false;
     }
 
     save_ctx_t *save_ctx = calloc(1, sizeof(save_ctx_t));
     save_init(save_ctx, &fp, save_mac_key, 0);
 
-    bool save_process_success = save_process(save_ctx);
-    TPRINTF("\n  Save process...");
-
-    if (!save_process_success) {
-        EPRINTF("Failed to process es save.");
+    if (!save_process(save_ctx)) {
         f_close(&fp);
         save_free_contexts(save_ctx);
         free(save_ctx);
@@ -285,7 +282,6 @@ static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, title
     }
 
     if (!save_open_file(save_ctx, &ticket_file, ticket_list_bin_path, OPEN_MODE_READ)) {
-        EPRINTF("Unable to locate ticket_list.bin in save.");
         f_close(&fp);
         save_free_contexts(save_ctx);
         free(save_ctx);
@@ -304,10 +300,8 @@ static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, title
         }
         offset += br;
     }
-    TPRINTF("  Count titlekeys...");
 
     if (!save_open_file(save_ctx, &ticket_file, ticket_bin_path, OPEN_MODE_READ)) {
-        EPRINTF("Unable to locate ticket.bin in save.");
         f_close(&fp);
         save_free_contexts(save_ctx);
         free(save_ctx);
@@ -331,20 +325,15 @@ static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, title
     save_free_contexts(save_ctx);
     free(save_ctx);
 
-    gfx_con_setpos(0, save_y);
+    // Position already restored by tui_pbar, no need to reset here
+    // Removing this prevents g_YLeftConfig from being overwritten with stale position
 
-    if (is_personalized) {
-        TPRINTFARGS("\n%kPersonalized... ", colors[(color_idx++) % 6]);
-    } else {
-        TPRINTFARGS("\n%kCommon...       ", colors[(color_idx++) % 6]);
-    }
-
-    gfx_printf("\n\n\n");
-
+    *elapsed_us = get_tmr_us() - step_time;
     return true;
 }
 
-static bool _derive_sd_seed(key_storage_t *keys) {
+static bool _derive_sd_seed(key_storage_t *keys, u32 *elapsed_us) {
+    u32 start_time = get_tmr_us();
     FIL fp;
     u32 read_bytes = 0;
     char *private_path = malloc(200);
@@ -359,12 +348,10 @@ static bool _derive_sd_seed(key_storage_t *keys) {
     FRESULT fr = f_open(&fp, private_path, FA_READ | FA_OPEN_EXISTING);
     free(private_path);
     if (fr) {
-        EPRINTF("Unable to open SD seed vector. Skipping.");
         return false;
     }
     // Get sd seed verification vector
     if (f_read(&fp, keys->temp_key, SE_KEY_128_SIZE, &read_bytes) || read_bytes != SE_KEY_128_SIZE) {
-        EPRINTF("Unable to read SD seed vector. Skipping.");
         f_close(&fp);
         return false;
     }
@@ -372,7 +359,6 @@ static bool _derive_sd_seed(key_storage_t *keys) {
 
     // This file is small enough that parsing the savedata properly is slower
     if (f_open(&fp, "bis:/save/8000000000000043", FA_READ | FA_OPEN_EXISTING)) {
-        EPRINTF("Unable to open ns_appman save.\nSkipping SD seed.");
         return false;
     }
 
@@ -389,8 +375,7 @@ static bool _derive_sd_seed(key_storage_t *keys) {
     }
     f_close(&fp);
 
-    TPRINTFARGS("%kSD Seed...      ", colors[(color_idx++) % 6]);
-
+    *elapsed_us = get_tmr_us() - start_time;
     return true;
 }
 
@@ -399,13 +384,25 @@ static bool _derive_titlekeys(key_storage_t *keys, titlekey_buffer_t *titlekey_b
         return false;
     }
 
-    gfx_printf("%kTitlekeys...     \n", colors[(color_idx++) % 6]);
-
+    u32 step_time, common_us = 0, personal_us = 0;
     const u32 buf_size = SAVE_BLOCK_SIZE_DEFAULT;
-    _get_titlekeys_from_save(buf_size, keys->save_mac_key, titlekey_buffer, NULL);
-    _get_titlekeys_from_save(buf_size, keys->save_mac_key, titlekey_buffer, &keys->eticket_rsa_keypair);
 
-    gfx_printf("\n%k  Found %d titlekeys.\n\n", colors[(color_idx++) % 6], _titlekey_count);
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kTitlekeys...\n", COLOR_WHITE);
+
+    // Common titlekeys
+    step_time = get_tmr_us();
+    if (_get_titlekeys_from_save(buf_size, keys->save_mac_key, titlekey_buffer, NULL, &common_us)) {
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kCommon...               %kdone in %d us\n", COLOR_WHITE, 0xFFCCCCCC, common_us);
+    }
+
+    // Personalized titlekeys
+    step_time = get_tmr_us();
+    if (_get_titlekeys_from_save(buf_size, keys->save_mac_key, titlekey_buffer, &keys->eticket_rsa_keypair, &personal_us)) {
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kPersonalized...         %kdone in %d us\n", COLOR_WHITE, 0xFFCCCCCC, personal_us);
+    }
+
+    if (_titlekey_count > 0)
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "\n%kFound %d titlekeys.\n\n", COLOR_CYAN_L, _titlekey_count);
 
     return true;
 }
@@ -427,13 +424,8 @@ static void _derive_emmc_keys(key_storage_t *keys, titlekey_buffer_t *titlekey_b
         return;
     }
 
-    if (!decrypt_ssl_rsa_key(keys, titlekey_buffer)) {
-        EPRINTF("Unable to derive SSL key.");
-    }
-
-    if (!decrypt_eticket_rsa_key(keys, titlekey_buffer, is_dev)) {
-        EPRINTF("Unable to derive ETicket key.");
-    }
+    decrypt_ssl_rsa_key(keys, titlekey_buffer);
+    decrypt_eticket_rsa_key(keys, titlekey_buffer, is_dev);
 
     // Parse eMMC GPT
     LIST_INIT(gpt);
@@ -456,13 +448,14 @@ static void _derive_emmc_keys(key_storage_t *keys, titlekey_buffer_t *titlekey_b
 
     if (!sd_mount()) {
         EPRINTF("Unable to mount SD.");
-    } else if (!_derive_sd_seed(keys)) {
-        EPRINTF("Unable to get SD seed.");
+    } else {
+        u32 sd_seed_us;
+        if (_derive_sd_seed(keys, &sd_seed_us)) {
+            gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kSD Seed...              %kdone in %d us\n", COLOR_WHITE, 0xFFCCCCCC, sd_seed_us);
+        }
     }
 
-    if (!_derive_titlekeys(keys, titlekey_buffer, is_dev)) {
-        EPRINTF("Unable to derive titlekeys.");
-    }
+    _derive_titlekeys(keys, titlekey_buffer, is_dev);
 
     f_mount(NULL, "bis:", 1);
     nx_emmc_gpt_free(&gpt);
@@ -482,7 +475,10 @@ int save_mariko_partial_keys(u32 start, u32 count, bool append) {
     }
 
     display_backlight_brightness(h_cfg.backlight, 1000);
+
+    // Clear main content area for dump output
     gfx_clear_partial_grey(0x1B, 32, 1224);
+
     gfx_con_setpos(0, 32);
 
     color_idx = 0;
@@ -559,7 +555,7 @@ int save_mariko_partial_keys(u32 start, u32 count, bool append) {
     f_write(&fp, text_buffer, strlen(text_buffer), NULL);
     f_close(&fp);
 
-    gfx_printf("%kWrote partials to %s\n", colors[(color_idx++) % 6], keyfile_path);
+    gfx_printf("%kWrote partials to %s\n", COLOR_CYAN_L, keyfile_path);
 
     free(text_buffer);
 
@@ -647,16 +643,15 @@ static void _save_keys_to_sd(key_storage_t *keys, titlekey_buffer_t *titlekey_bu
     s_printf(root_key_name + 14, "%02x", TSEC_ROOT_KEY_VERSION);
     _save_key(root_key_name, keys->tsec_root_key, SE_KEY_128_SIZE, text_buffer);
 
-    gfx_printf("\n%k  Found %d %s keys.\n\n", colors[(color_idx++) % 6], _key_count, is_dev ? "dev" : "prod");
-    gfx_printf("%kFound through master_key_%02x.\n\n", colors[(color_idx++) % 6], KB_FIRMWARE_VERSION_MAX);
-
     f_mkdir("sd:/switch");
 
     const char *keyfile_path = is_dev ? "sd:/switch/dev.keys" : "sd:/switch/prod.keys";
 
     FILINFO fno;
     if (!sd_save_to_file(text_buffer, strlen(text_buffer), keyfile_path) && !f_stat(keyfile_path, &fno)) {
-        gfx_printf("%kWrote %d bytes to %s\n", colors[(color_idx++) % 6], (u32)fno.fsize, keyfile_path);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kFound %d %s keys.\n", COLOR_CYAN_L, _key_count, is_dev ? "dev" : "prod");
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kFound through master_key_%02x.\n\n", COLOR_CYAN_L, KB_FIRMWARE_VERSION_MAX);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kWrote %d bytes to %s\n\n", COLOR_GREEN, (u32)fno.fsize, keyfile_path);
     } else {
         EPRINTF("Unable to save keys to SD.");
     }
@@ -680,7 +675,7 @@ static void _save_keys_to_sd(key_storage_t *keys, titlekey_buffer_t *titlekey_bu
 
     keyfile_path = "sd:/switch/title.keys";
     if (!sd_save_to_file(text_buffer, strlen(text_buffer), keyfile_path) && !f_stat(keyfile_path, &fno)) {
-        gfx_printf("%kWrote %d bytes to %s\n", colors[(color_idx++) % 6], (u32)fno.fsize, keyfile_path);
+        // Titlekeys already shown during derivation
     } else {
         EPRINTF("Unable to save titlekeys to SD.");
     }
@@ -689,6 +684,9 @@ static void _save_keys_to_sd(key_storage_t *keys, titlekey_buffer_t *titlekey_bu
 }
 
 static void _derive_keys() {
+    u32 step_time;
+    u32 total_start_time = get_tmr_us();
+
     minerva_periodic_training();
 
     if (!check_keyslot_access()) {
@@ -696,13 +694,13 @@ static void _derive_keys() {
         return;
     }
 
-    u32 start_whole_operation_time = get_tmr_us();
-
+    // MMC init
+    step_time = get_tmr_us();
     if (emummc_storage_init_mmc()) {
         EPRINTF("Unable to init MMC.");
-    } else {
-        TPRINTFARGS("%kMMC init...     ", colors[(color_idx++) % 6]);
+        return;
     }
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kMMC init...             %kdone in %d us\n", COLOR_WHITE, 0xFFCCCCCC, (get_tmr_us() - step_time));
 
     minerva_periodic_training();
 
@@ -716,13 +714,15 @@ static void _derive_keys() {
     key_storage_t __attribute__((aligned(4))) prod_keys = {0}, dev_keys = {0};
     key_storage_t *keys = is_dev ? &dev_keys : &prod_keys;
 
+    // Master keys
+    step_time = get_tmr_us();
     _derive_master_keys(&prod_keys, &dev_keys, is_dev);
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kMaster keys...          %kdone in %d us\n", COLOR_WHITE, 0xFFCCCCCC, (get_tmr_us() - step_time));
 
-    TPRINTFARGS("%kMaster keys...  ", colors[(color_idx++) % 6]);
-
+    // BIS keys
+    step_time = get_tmr_us();
     _derive_bis_keys(keys);
-
-    TPRINTFARGS("%kBIS keys...     ", colors[(color_idx++) % 6]);
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kBIS keys...             %kdone in %d us\n", COLOR_WHITE, 0xFFCCCCCC, (get_tmr_us() - step_time));
 
     _derive_misc_keys(keys);
     _derive_non_unique_keys(&prod_keys, is_dev);
@@ -739,8 +739,9 @@ static void _derive_keys() {
         EPRINTF("Missing needed BIS keys.\nSkipping SD seed and titlekeys.");
     }
 
-    end_time = get_tmr_us();
-    gfx_printf("%kLockpick totally done in %d us\n", colors[(color_idx++) % 6], end_time - start_whole_operation_time);
+    // Total time
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "\n%kLockpick totally done in %d ms\n\n", COLOR_WHITE,
+        (get_tmr_us() - total_start_time) / 1000);
 
     if (h_cfg.t210b01) {
         // On Mariko, save only relevant key set
@@ -766,8 +767,16 @@ void derive_amiibo_keys() {
     minerva_periodic_training();
 
     display_backlight_brightness(h_cfg.backlight, 1000);
-    gfx_clear_partial_grey(0x1B, 32, 1224);
-    gfx_con_setpos(0, 32);
+    gfx_clear_partial_grey(0x1B, 0, 696); // Clear main display area
+
+    // Draw title bar and bottom bar
+    char title[64];
+    s_printf(title, "[Lockpick RCM Pro v%d.%d.%d] - Amiibo Keys", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
+    gfx_draw_title_bar(title);
+    gfx_draw_bottom_bar("Hold VOL+: Screenshot   Any Button: Return");
+
+    // Content with left margin (use global UI settings)
+    gfx_con_setpos(UI_CONTENT_START_X, UI_CONTENT_START_Y);
 
     color_idx = 0;
 
@@ -792,31 +801,52 @@ void derive_amiibo_keys() {
     if (memcmp(hash, is_dev ? nfc_blob_hash_dev : nfc_blob_hash, sizeof(hash)) != 0) {
         EPRINTF("Amiibo hash mismatch. Skipping save.");
     } else {
-        const char *keyfile_path = is_dev ? "sd:/switch/key_dev.bin" : "sd:/switch/key_retail.bin";
-
-        if (!sd_save_to_file(&nfc_save_keys[0], sizeof(nfc_save_keys), keyfile_path)) {
-            gfx_printf("%kWrote Amiibo keys to\n %s\n", colors[(color_idx++) % 6], keyfile_path);
+        // Ensure SD card is mounted before writing
+        if (!sd_mount()) {
+            EPRINTF("Unable to mount SD card.");
         } else {
-            EPRINTF("Unable to save Amiibo keys to SD.");
+            const char *keyfile_path = is_dev ? "sd:/switch/key_dev.bin" : "sd:/switch/key_retail.bin";
+
+            if (!sd_save_to_file(&nfc_save_keys[0], sizeof(nfc_save_keys), keyfile_path)) {
+                gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kWrote Amiibo keys to\n%s\n", COLOR_GREEN, keyfile_path);
+            } else {
+                EPRINTF("Unable to save Amiibo keys to SD.");
+            }
         }
     }
 
-    gfx_printf("\n%kPress a button to return to the menu.", colors[(color_idx++) % 6]);
+    gfx_printf("\n" GFX_LANDSCAPE_MARGIN_STR "%kPress any button.\n", COLOR_WHITE);
     minerva_change_freq(FREQ_800);
     btn_wait();
     gfx_clear_grey(0x1B);
 }
 
 void dump_keys() {
+    // Change CPU frequency BEFORE any graphics operations
     minerva_change_freq(FREQ_1600);
 
     display_backlight_brightness(h_cfg.backlight, 1000);
     gfx_clear_grey(0x1B);
-    gfx_con_setpos(0, 0);
 
-    gfx_printf("%k╔══════════════════════════════════════╗\n", COLOR_GREY_M);
-    gfx_printf("║  %kLockpick RCM Pro%k v%d.%d.%d         ║\n", COLOR_CYAN_L, COLOR_GREY_M, LP_VER_MJ, LP_VER_MN, LP_VER_BF);
-    gfx_printf("╚══════════════════════════════════════╝%k\n\n", COLOR_SOFT_WHITE);
+    // IMPORTANT: Reinitialize ALL graphics state after menu to ensure clean state
+    gfx_con.fntsz = 16;
+    gfx_con.x = 0;
+    gfx_con.y = 0;
+    g_YLeftConfig = 1279;
+    gfx_con.fgcol = 0xFFCCCCCC;
+    gfx_con.fillbg = 0;
+    gfx_con.bgcol = 0xFF1B1B1B;
+    gfx_con.mute = 0;
+
+    // Draw title bar and bottom bar AFTER graphics initialization
+    char title[64];
+    s_printf(title, "[Lockpick RCM Pro v%d.%d.%d]", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
+    gfx_draw_title_bar(title);
+    gfx_draw_bottom_bar("Hold VOL+: Screenshot   Any Button: Return");
+
+    // Set content position and colors (use global UI settings, no background fill)
+    gfx_con_setcol(COLOR_SOFT_WHITE, 0, 0xFF1B1B1B);
+    gfx_con_setpos(UI_CONTENT_START_X, UI_CONTENT_START_Y);
 
     _key_count = 0;
     _titlekey_count = 0;
@@ -849,17 +879,47 @@ void dump_keys() {
     }
 
     minerva_change_freq(FREQ_800);
-    gfx_printf("\n%kPress VOL+ to save a screenshot\n or another button to return to the menu.\n\n", colors[(color_idx++) % 6]);
-    u8 btn = btn_wait();
-    if (btn == BTN_VOL_UP) {
-        int res = save_fb_to_bmp();
-        if (!res) {
-            gfx_printf("%kScreenshot sd:/switch/lockpick_rcm.bmp saved.", colors[(color_idx++) % 6]);
-        } else {
-            EPRINTF("Screenshot failed.");
+
+    // Wait for button press with hold detection for screenshot
+    u32 vol_press_start = 0;
+    while (true)
+    {
+        u32 btn = btn_read();
+
+        if (btn & BTN_VOL_UP)
+        {
+            if (vol_press_start == 0)
+                vol_press_start = get_tmr_ms();
+            else if (get_tmr_ms() - vol_press_start > 1000)
+            {
+                // Button held for 1 second - take screenshot
+                int save_fb_to_bmp();
+                int res = save_fb_to_bmp();
+                if (!res) {
+                    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kScreenshot saved!\n", COLOR_GREEN);
+                } else {
+                    EPRINTF("Screenshot failed.");
+                }
+                msleep(1000);
+
+                // Wait for button release
+                while (btn_read() & BTN_VOL_UP)
+                    msleep(10);
+
+                // Wait for any button press to return
+                btn_wait();
+                break;
+            }
         }
-        gfx_printf("\n%kPress a button to return to the menu.", colors[(color_idx++) % 6]);
-        btn_wait();
+        else
+        {
+            vol_press_start = 0;
+            // Any other button pressed - return immediately
+            if (btn)
+                break;
+        }
+
+        msleep(10);
     }
     gfx_clear_grey(0x1B);
 }
@@ -922,17 +982,17 @@ bool get_emmc_id_external(char *emmc_id_out) {
 }
 
 void dump_prodinfo_after_keys() {
-    gfx_printf("\n%kDumping PRODINFO partition...\n", COLOR_CYAN_L);
+    gfx_printf("\n" GFX_LANDSCAPE_MARGIN_STR "%kDumping PRODINFO partition...\n", COLOR_CYAN_L);
 
     // Mount SD card
     if (!sd_mount()) {
-        gfx_printf("%kFailed to mount SD card!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "SD mount failed!\n");
         return;
     }
 
     // Ensure eMMC is already initialized from key derivation
     if (!emmc_storage.initialized && emummc_storage_init_mmc()) {
-        gfx_printf("%kFailed to initialize eMMC!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "eMMC init failed!\n");
         sd_end();
         return;
     }
@@ -940,12 +1000,12 @@ void dump_prodinfo_after_keys() {
     // Get eMMC ID for folder structure
     char emmc_id[9] = {0};  // 8 hex chars + null terminator
     if (!get_emmc_id(emmc_id)) {
-        gfx_printf("%kFailed to get eMMC ID!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Failed to get eMMC ID!\n");
         sd_end();
         return;
     }
 
-    gfx_printf("%kDevice ID: %s\n", COLOR_CYAN_L, emmc_id);
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kDevice ID: %s\n", COLOR_CYAN_L, emmc_id);
 
     // Create folder structure: backup/[emmcID]/partitions/ and backup/[emmcID]/dumps/
     char base_path[64];
@@ -962,7 +1022,7 @@ void dump_prodinfo_after_keys() {
     f_mkdir(partitions_path);
     f_mkdir(dumps_path);
 
-    // Check for old backups and offer to migrate
+    // Check for old backups and migrate silently
     FIL fp_test;
     bool has_old_dec = (f_open(&fp_test, "sd:/switch/prodinfo.dec", FA_READ) == FR_OK);
     if (has_old_dec) f_close(&fp_test);
@@ -971,8 +1031,7 @@ void dump_prodinfo_after_keys() {
     if (has_old_enc) f_close(&fp_test);
 
     if (has_old_dec || has_old_enc) {
-        gfx_printf("\n%kOld PRODINFO backups detected in /switch/\n", COLOR_CYAN_L);
-        gfx_printf("%kMigrating to new structure...\n", COLOR_TURQUOISE);
+        // Migrate silently, no message needed
 
         // Copy old files to new location
         if (has_old_dec) {
@@ -993,7 +1052,6 @@ void dump_prodinfo_after_keys() {
                         UINT bw;
                         f_write(&fp_new, temp_buf, old_size, &bw);
                         f_close(&fp_new);
-                        gfx_printf("%k  Copied prodinfo.dec\n", COLOR_GREENISH);
                     }
                     free(temp_buf);
                 }
@@ -1018,7 +1076,6 @@ void dump_prodinfo_after_keys() {
                         UINT bw;
                         f_write(&fp_new, temp_buf, old_size, &bw);
                         f_close(&fp_new);
-                        gfx_printf("%k  Copied prodinfo.enc\n", COLOR_GREENISH);
 
                         // Also copy to partitions/PRODINFO
                         char hekate[96];
@@ -1027,20 +1084,17 @@ void dump_prodinfo_after_keys() {
                         if (f_open(&fp_hekate, hekate, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
                             f_write(&fp_hekate, temp_buf, old_size, &bw);
                             f_close(&fp_hekate);
-                            gfx_printf("%k  Created Hekate backup\n", COLOR_GREENISH);
                         }
                     }
                     free(temp_buf);
                 }
             }
         }
-
-        gfx_printf("%kMigration complete! Old files kept for safety.\n\n", COLOR_CYAN_L);
     }
 
     // Set to GPP partition to parse GPT
     if (!emummc_storage_set_mmc_partition(EMMC_GPP)) {
-        gfx_printf("%kFailed to set GPP partition!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "GPP partition failed!\n");
         sd_end();
         return;
     }
@@ -1050,7 +1104,7 @@ void dump_prodinfo_after_keys() {
     nx_emmc_gpt_parse(&gpt, &emmc_storage);
     emmc_part_t *prodinfo_part = nx_emmc_part_find(&gpt, "PRODINFO");
     if (!prodinfo_part) {
-        gfx_printf("%kPRODINFO partition not found!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "PRODINFO not found!\n");
         nx_emmc_gpt_free(&gpt);
         sd_end();
         return;
@@ -1062,26 +1116,26 @@ void dump_prodinfo_after_keys() {
     u32 partition_sectors = prodinfo_part->lba_end - prodinfo_part->lba_start + 1;
     u32 partition_size = partition_sectors * NX_EMMC_BLOCKSIZE;
 
-    gfx_printf("%kPRODINFO size: %d KB (%d sectors)\n", COLOR_SOFT_WHITE, partition_size / 1024, partition_sectors);
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kPRODINFO size: %d KB (%d sectors)\n", COLOR_WHITE, partition_size / 1024, partition_sectors);
 
     // Allocate buffer (256KB at a time)
     const u32 buf_size = 0x40000;
     u8 *buffer = (u8 *)malloc(buf_size);
     if (!buffer) {
-        gfx_printf("%kFailed to allocate buffer!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Buffer alloc failed!\n");
         nx_emmc_gpt_free(&gpt);
         sd_end();
         return;
     }
 
     // Dump decrypted PRODINFO to dumps folder
+    gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kDumping PRODINFO...\n", COLOR_WHITE);
     char dec_path[96];
     s_printf(dec_path, "%s/prodinfo.dec", dumps_path);
 
-    gfx_printf("%kDumping decrypted PRODINFO...\n", COLOR_TURQUOISE);
     FIL fp_dec;
     if (f_open(&fp_dec, dec_path, FA_CREATE_ALWAYS | FA_WRITE)) {
-        gfx_printf("%kFailed to create prodinfo.dec!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Failed to create dec!\n");
         free(buffer);
         nx_emmc_gpt_free(&gpt);
         sd_end();
@@ -1095,14 +1149,14 @@ void dump_prodinfo_after_keys() {
         u32 sectors_to_read = MIN(num_sectors_per_read, partition_sectors - sectors_read);
 
         if (nx_emmc_bis_read(sectors_read, sectors_to_read, buffer)) {
-            gfx_printf("%kRead error at sector %d!\n", COLOR_ERROR, sectors_read);
+            gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Read error at sector %d!\n", sectors_read);
             break;
         }
 
         u32 bytes_to_write = sectors_to_read * NX_EMMC_BLOCKSIZE;
         UINT bytes_written;
         if (f_write(&fp_dec, buffer, bytes_to_write, &bytes_written) || bytes_written != bytes_to_write) {
-            gfx_printf("%kWrite error!\n", COLOR_ERROR);
+            gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Write error!\n");
             break;
         }
 
@@ -1113,7 +1167,7 @@ void dump_prodinfo_after_keys() {
     nx_emmc_bis_finalize();
 
     if (sectors_read == partition_sectors) {
-        gfx_printf("%kDecrypted PRODINFO saved successfully!\n", COLOR_GREENISH);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "%kDone!\n", COLOR_GREEN);
     }
 
     // Dump encrypted PRODINFO to both dumps and partitions folders
@@ -1122,10 +1176,9 @@ void dump_prodinfo_after_keys() {
     s_printf(enc_path, "%s/prodinfo.enc", dumps_path);
     s_printf(hekate_path, "%s/PRODINFO", partitions_path);
 
-    gfx_printf("%kDumping encrypted PRODINFO...\n", COLOR_TURQUOISE);
     FIL fp_enc;
     if (f_open(&fp_enc, enc_path, FA_CREATE_ALWAYS | FA_WRITE)) {
-        gfx_printf("%kFailed to create prodinfo.enc!\n", COLOR_ERROR);
+        gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Failed to create enc!\n");
         free(buffer);
         nx_emmc_gpt_free(&gpt);
         sd_end();
@@ -1140,14 +1193,14 @@ void dump_prodinfo_after_keys() {
 
         // Read raw encrypted sectors directly from eMMC
         if (!sdmmc_storage_read(&emmc_storage, lba_start + sectors_read, sectors_to_read, buffer)) {
-            gfx_printf("%kRead error at sector %d!\n", COLOR_ERROR, sectors_read);
+            gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Read error at sector %d!\n", sectors_read);
             break;
         }
 
         u32 bytes_to_write = sectors_to_read * NX_EMMC_BLOCKSIZE;
         UINT bytes_written;
         if (f_write(&fp_enc, buffer, bytes_to_write, &bytes_written) || bytes_written != bytes_to_write) {
-            gfx_printf("%kWrite error!\n", COLOR_ERROR);
+            gfx_printf(GFX_LANDSCAPE_MARGIN_STR "Write error!\n");
             break;
         }
 
@@ -1157,11 +1210,7 @@ void dump_prodinfo_after_keys() {
     f_close(&fp_enc);
 
     if (sectors_read == partition_sectors) {
-        gfx_printf("%kEncrypted PRODINFO saved successfully!\n", COLOR_GREENISH);
-
-        // Also copy encrypted version to partitions/PRODINFO (Hekate-compatible location)
-        gfx_printf("%kCreating Hekate-compatible backup...\n", COLOR_TURQUOISE);
-
+        // Copy encrypted version to partitions/PRODINFO (Hekate-compatible location)
         FIL fp_src, fp_dst;
         if (f_open(&fp_src, enc_path, FA_READ) == FR_OK) {
             if (f_open(&fp_dst, hekate_path, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK) {
@@ -1172,25 +1221,23 @@ void dump_prodinfo_after_keys() {
                     UINT bytes_read, bytes_written;
 
                     if (f_read(&fp_src, buffer, bytes_to_copy, &bytes_read) != FR_OK || bytes_read != bytes_to_copy) {
-                        gfx_printf("%kCopy failed!\n", COLOR_ERROR);
                         break;
                     }
 
                     if (f_write(&fp_dst, buffer, bytes_to_copy, &bytes_written) != FR_OK || bytes_written != bytes_to_copy) {
-                        gfx_printf("%kCopy failed!\n", COLOR_ERROR);
                         break;
                     }
 
                     bytes_remaining -= bytes_to_copy;
                 }
                 f_close(&fp_dst);
-                gfx_printf("%kHekate backup created!\n", COLOR_GREENISH);
             }
             f_close(&fp_src);
         }
     }
 
-    gfx_printf("\n%kPRODINFO backup location: backup/%s/\n", COLOR_CYAN_L, emmc_id);
+    // Show final backup location
+    gfx_printf("\n" GFX_LANDSCAPE_MARGIN_STR "%kPRODINFO backup location: backup/%s/\n", COLOR_CYAN_L, emmc_id);
 
     // Cleanup
     free(buffer);

@@ -23,6 +23,8 @@
 // Global gfx console and context.
 gfx_ctxt_t gfx_ctxt;
 gfx_con_t gfx_con;
+u32 g_YLeftConfig = 1279; // Default to left edge (YLEFT)
+u32 g_XTopConfig = 0;     // Default to top edge (XTOP) - tracks initial column for newlines
 
 static bool gfx_con_init_done = false;
 
@@ -126,11 +128,14 @@ static const u8 _gfx_font[] = {
 
 void gfx_clear_grey(u8 color)
 {
+	// Use memset for speed - expand 8-bit grayscale to 32-bit ARGB
+	// memset repeats the byte pattern, so 0x1B becomes 0x1B1B1B1B which works for grayscale
 	memset(gfx_ctxt.fb, color, gfx_ctxt.width * gfx_ctxt.height * 4);
 }
 
 void gfx_clear_partial_grey(u8 color, u32 pos_x, u32 height)
 {
+	// Use memset for speed - pos_x = internal y position, height = number of rows
 	memset(gfx_ctxt.fb + pos_x * gfx_ctxt.stride, color, height * 4 * gfx_ctxt.stride);
 }
 
@@ -161,6 +166,9 @@ void gfx_con_init()
 	gfx_con.bgcol = 0xFF1B1B1B;
 	gfx_con.mute = 0;
 
+	g_YLeftConfig = 1279; // Default to left edge
+	g_XTopConfig = 0;     // Default to top edge
+
 	gfx_con_init_done = true;
 }
 
@@ -173,14 +181,25 @@ void gfx_con_setcol(u32 fgcol, int fillbg, u32 bgcol)
 
 void gfx_con_getpos(u32 *x, u32 *y)
 {
-	*x = gfx_con.x;
-	*y = gfx_con.y;
+	// Software rotation for landscape mode (like TegraExplorer/warmboot-extractor)
+	*x = 1279 - gfx_con.y;
+	*y = gfx_con.x;
 }
 
 void gfx_con_setpos(u32 x, u32 y)
 {
-	gfx_con.x = x;
-	gfx_con.y = y;
+	// Software rotation for landscape mode (like TegraExplorer/warmboot-extractor)
+	gfx_con.x = y;
+	gfx_con.y = 1279 - x;
+
+	// Safety: clamp y to valid range to prevent memory corruption
+	if (gfx_con.y < 16)
+		gfx_con.y = 16;
+	if (gfx_con.y > 1279)
+		gfx_con.y = 1279;
+
+	g_YLeftConfig = gfx_con.y; // Track left margin for newlines (after clamp)
+	g_XTopConfig = y;          // Track top margin for newlines (internal x = external y)
 }
 
 void gfx_putc(char c)
@@ -189,53 +208,64 @@ void gfx_putc(char c)
 	switch (gfx_con.fntsz)
 	{
 	case 16:
-		if (c >= 32 && c <= 126)
+		if (c >= 32 && c <= 129)
 		{
 			u8 *cbuf = (u8 *)&_gfx_font[8 * (c - 32)];
 			u32 *fb = gfx_ctxt.fb + gfx_con.x + gfx_con.y * gfx_ctxt.stride;
 
+			// Rotated rendering (like TegraExplorer) - renders vertically
 			for (u32 i = 0; i < 16; i+=2)
 			{
 				u8 v = *cbuf;
-				for (u32 k = 0; k < 2; k++)
-				{
-					for (u32 j = 0; j < 8; j++)
-					{
-						if (v & 1)
-						{
-							*fb = gfx_con.fgcol;
-							fb++;
-							*fb = gfx_con.fgcol;
-						}
-						else if (gfx_con.fillbg)
-						{
-							*fb = gfx_con.bgcol;
-							fb++;
-							*fb = gfx_con.bgcol;
-						}
-						else
-							fb++;
-						v >>= 1;
-						fb++;
+				for (u32 t = 0; t < 8; t++){
+					if (v & 1 || gfx_con.fillbg){
+						u32 setColor = (v & 1) ? gfx_con.fgcol : gfx_con.bgcol;
+						*fb = setColor;
+						*(fb + 1) = setColor;
+						*(fb - gfx_ctxt.stride) = setColor;
+						*(fb - gfx_ctxt.stride + 1) = setColor;
 					}
-					fb += gfx_ctxt.stride - 16;
-					v = *cbuf;
+					v >>= 1;
+					fb -= gfx_ctxt.stride * 2;
 				}
+				fb += gfx_ctxt.stride * 16 + 2;
 				cbuf++;
 			}
-			gfx_con.x += 16;
-			if (gfx_con.x > gfx_ctxt.width - 16)
-			{
-				gfx_con.x = 0;
-				gfx_con.y += 16;
+
+			gfx_con.y -= 16;
+			if (gfx_con.y < 16){
+				// Safety: ensure YLeftConfig and XTopConfig are valid before using them
+				if (g_YLeftConfig < 16)
+					g_YLeftConfig = 1279;  // Reset to top of screen in landscape mode
+				if (g_XTopConfig > 1279)
+					g_XTopConfig = 0;      // Reset to left edge if invalid
+				gfx_con.y = g_YLeftConfig;
+				gfx_con.x += 16;  // Advance to next line (downward in landscape mode)
+				// Wrap to top if we go off bottom of screen
+				if (gfx_con.x >= 720)
+					gfx_con.x = 0;
 			}
 		}
 		else if (c == '\n')
 		{
-			gfx_con.x = 0;
-			gfx_con.y += 16;
-			if (gfx_con.y > gfx_ctxt.height - 16)
-				gfx_con.y = 0;
+			// Safety: ensure YLeftConfig and XTopConfig are valid
+			if (g_YLeftConfig < 16)
+				g_YLeftConfig = 1279;
+			if (g_XTopConfig > 1279)
+				g_XTopConfig = 0;
+			gfx_con.y = g_YLeftConfig;
+			gfx_con.x += 16;  // Advance to next line (downward in landscape mode)
+			// Wrap to top if we go off bottom of screen
+			if (gfx_con.x >= 720)
+				gfx_con.x = 0;
+		}
+		else if (c == '\r')
+		{
+			// Carriage return: go to start of current line (not initial line)
+			// Safety: ensure YLeftConfig is valid
+			if (g_YLeftConfig < 16)
+				g_YLeftConfig = 1279;
+			gfx_con.y = g_YLeftConfig;  // Reset to left margin, keep current line (gfx_con.x unchanged)
 		}
 		break;
 	case 8:
@@ -280,6 +310,12 @@ void gfx_puts(const char *s)
 {
 	if (!s || !gfx_con_init_done || gfx_con.mute)
 		return;
+
+	// Safety: clamp y to valid range before rendering to prevent memory corruption
+	if (gfx_con.y < 16)
+		gfx_con.y = 16;
+	if (gfx_con.y > 1279)
+		gfx_con.y = 1279;
 
 	for (; *s; s++)
 		gfx_putc(*s);
@@ -408,6 +444,93 @@ void gfx_printf(const char *fmt, ...)
 	va_end(ap);
 }
 
+void gfx_printf_centered(u32 y, const char *fmt, ...)
+{
+	// Simplified version: just center by manually positioning
+	// Use gfx_printf directly without vsnprintf to avoid stdio dependency
+	va_list ap;
+	va_start(ap, fmt);
+
+	// Calculate width by parsing fmt for % format specifiers (basic implementation)
+	u32 len = 0;
+	const char *p = fmt;
+	while (*p && *p != '%') p++; // Skip to first % or end
+	len = p - fmt;
+
+	// Add estimated length for format args (rough estimate)
+	if (*p == '%') {
+		// Each format adds ~10 chars on average
+		while (*p) {
+			if (*p == '%') {
+				p++;
+				if (*p == 'd' || *p == 'x' || *p == 'X' || *p == 'p' || *p == 'c' || *p == 's' || *p == 'k' || *p == 'K')
+					len += 10;
+				else if (*p == '%')
+					len += 1;
+			}
+			p++;
+		}
+	}
+
+	// Calculate centered x position (use width for landscape horizontal centering)
+	u32 x = (gfx_ctxt.width - (len * 16)) / 2;
+	if (x > 1279) x = 0; // Safety check
+
+	gfx_con_setpos(x, y);
+
+	// Use the same printf logic as gfx_printf, but already positioned
+	va_end(ap);
+	va_start(ap, fmt);
+
+	while(*fmt)
+	{
+		if(*fmt == '%')
+		{
+			fmt++;
+			switch(*fmt)
+			{
+			case 'c':
+				gfx_putc(va_arg(ap, u32));
+				break;
+			case 's':
+				gfx_puts(va_arg(ap, char *));
+				break;
+			case 'd':
+				_gfx_putn(va_arg(ap, u32), 10, 0, 0);
+				break;
+			case 'p':
+			case 'P':
+			case 'x':
+			case 'X':
+				_gfx_putn(va_arg(ap, u32), 16, 0, 0);
+				break;
+			case 'k':
+				gfx_con.fgcol = va_arg(ap, u32);
+				break;
+			case 'K':
+				gfx_con.bgcol = va_arg(ap, u32);
+				gfx_con.fillbg = 1;
+				break;
+			case '%':
+				gfx_putc('%');
+				break;
+			case '\0':
+				goto out;
+			default:
+				gfx_putc('%');
+				gfx_putc(*fmt);
+				break;
+			}
+		}
+		else
+			gfx_putc(*fmt);
+		fmt++;
+	}
+
+out:
+	va_end(ap);
+}
+
 void gfx_hexdump(u32 base, const void *buf, u32 len)
 {
 	if (!gfx_con_init_done || gfx_con.mute)
@@ -519,7 +642,8 @@ static int abs(int x)
 
 void gfx_set_pixel(u32 x, u32 y, u32 color)
 {
-	gfx_ctxt.fb[x + y * gfx_ctxt.stride] = color;
+	// Transform for landscape mode: external (x,y) → internal (y, 1279-x)
+	gfx_ctxt.fb[y + (1279 - x) * gfx_ctxt.stride] = color;
 }
 
 void gfx_line(int x0, int y0, int x1, int y1, u32 color)
@@ -530,6 +654,7 @@ void gfx_line(int x0, int y0, int x1, int y1, u32 color)
 
 	while (1)
 	{
+		// Transform for landscape mode
 		gfx_set_pixel(x0, y0, color);
 		if (x0 == x1 && y0 == y1)
 			break;
@@ -589,4 +714,56 @@ void gfx_render_bmp_argb(const u32 *buf, u32 size_x, u32 size_y, u32 pos_x, u32 
 		for (u32 x = pos_x; x < (pos_x + size_x); x++)
 			gfx_ctxt.fb[x + y * gfx_ctxt.stride] = buf[(size_y + pos_y - 1 - y ) * size_x + x - pos_x];
 	}
+}
+
+void gfx_draw_title_bar(const char *title)
+{
+	// Save current graphics state
+	u8 saved_fillbg = gfx_con.fillbg;
+	u32 saved_bgcol = gfx_con.bgcol;
+
+	// Draw TOP BAR (16px tall, dark grey background for dark theme)
+	for (u32 y = 0; y < 1280; y++)
+	{
+		for (u32 x = 0; x < 16; x++)
+		{
+			gfx_ctxt.fb[x + y * gfx_ctxt.stride] = 0xFF3D3D3D;
+		}
+	}
+
+	// Draw title in top-left corner (cyan text on dark grey)
+	gfx_con_setcol(0xFF00D8FF, 1, 0xFF3D3D3D);
+	gfx_con_setpos(0, 0);
+	gfx_printf("%s", title);
+
+	// Restore graphics state (preserve saved fillbg, only set fgcol)
+	gfx_con.fillbg = saved_fillbg;
+	gfx_con.bgcol = saved_bgcol;
+	gfx_con.fgcol = 0xFFCCCCCC;
+}
+
+void gfx_draw_bottom_bar(const char *legend)
+{
+	// Save current graphics state
+	u8 saved_fillbg = gfx_con.fillbg;
+	u32 saved_bgcol = gfx_con.bgcol;
+
+	// Draw BOTTOM BAR (16px tall, dark grey background for dark theme)
+	for (u32 y = 0; y < 1280; y++)
+	{
+		for (u32 x = 704; x < 720; x++)
+		{
+			gfx_ctxt.fb[x + y * gfx_ctxt.stride] = 0xFF3D3D3D;
+		}
+	}
+
+	// Draw legend in bottom-left corner (cyan text on dark grey)
+	gfx_con_setcol(0xFF00D8FF, 1, 0xFF3D3D3D);
+	gfx_con_setpos(0, 704);
+	gfx_printf("%s", legend);
+
+	// Restore graphics state (preserve saved fillbg, only set fgcol)
+	gfx_con.fillbg = saved_fillbg;
+	gfx_con.bgcol = saved_bgcol;
+	gfx_con.fgcol = 0xFFCCCCCC;
 }

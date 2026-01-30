@@ -19,6 +19,17 @@
 
 #include <utils/types.h>
 
+// Version fallbacks (set by Makefile, these are defaults)
+#ifndef LP_VER_MJ
+#define LP_VER_MJ 1
+#endif
+#ifndef LP_VER_MN
+#define LP_VER_MN 9
+#endif
+#ifndef LP_VER_BF
+#define LP_VER_BF 17
+#endif
+
 typedef struct _hekate_config
 {
 	// Non-volatile config.
