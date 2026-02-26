@@ -24,6 +24,7 @@
 #include <gfx_utils.h>
 #include "gfx/gfx.h"
 #include "gfx/tui.h"
+#include "hid/hid.h"
 #include "keys/keys.h"
 #include <libs/fatfs/ff.h>
 #include <mem/heap.h>
@@ -285,7 +286,7 @@ out:
 	sd_end();
 	free(dir);
 
-	btn_wait();
+	hidWait();
 }
 
 void launch_hekate()
@@ -298,7 +299,7 @@ void launch_hekate()
 		gfx_clear_grey(0x1B);
 		gfx_con_setpos(0, 0);
 		EPRINTF("bootloader/update.bin not found!");
-		btn_wait();
+		hidWait();
 	}
 }
 
@@ -521,9 +522,10 @@ out_wait:
 	u32 vol_press_start = 0;
 	while (true)
 	{
-		u32 btn = btn_read();
+		Input_t *inp = hidRead();
+		u32 btn = inp->buttons;
 
-		if (btn & BTN_VOL_UP)
+		if (btn & (BtnVolP | JoyLUp))
 		{
 			if (vol_press_start == 0)
 				vol_press_start = get_tmr_ms();
@@ -540,11 +542,11 @@ out_wait:
 				msleep(1000);
 
 				// Wait for button release
-				while (btn_read() & BTN_VOL_UP)
+				while (hidRead()->buttons & (BtnVolP | JoyLUp))
 					msleep(10);
 
 				// Wait for any button press to return
-				btn_wait();
+				hidWait();
 				break;
 			}
 		}
@@ -578,8 +580,8 @@ void restore_prodinfo()
 	gfx_printf("%kMake sure you have a backup before proceeding!\n", COLOR_RED);
 	gfx_printf("\n%kPress VOL+ to continue or any other button to cancel.\n", COLOR_WHITE);
 
-	u8 btn = btn_wait();
-	if (btn != BTN_VOL_UP) {
+	Input_t *inp = hidWait();
+	if (!(inp->buttons & (BtnVolP | JoyLUp))) {
 		gfx_printf("%kCancelled.\n", COLOR_WHITE);
 		goto out_wait;
 	}
@@ -800,9 +802,10 @@ out_wait:
 	u32 vol_press_start = 0;
 	while (true)
 	{
-		u32 btn = btn_read();
+		Input_t *inp = hidRead();
+		u32 btn = inp->buttons;
 
-		if (btn & BTN_VOL_UP)
+		if (btn & (BtnVolP | JoyLUp))
 		{
 			if (vol_press_start == 0)
 				vol_press_start = get_tmr_ms();
@@ -819,11 +822,11 @@ out_wait:
 				msleep(1000);
 
 				// Wait for button release
-				while (btn_read() & BTN_VOL_UP)
+				while (hidRead()->buttons & (BtnVolP | JoyLUp))
 					msleep(10);
 
 				// Wait for any button press to return
-				btn_wait();
+				hidWait();
 				break;
 			}
 		}
@@ -856,10 +859,10 @@ void dump_mariko_partial_keys()
 		}
 
 		gfx_printf("\n%kPress a button to return to the menu.", COLOR_CYAN_L);
-		btn_wait();
+		hidWait();
 
 		// Wait for button release to prevent accidental menu navigation
-		while (btn_read()) msleep(10);
+		while (hidRead()->buttons) msleep(10);
 	}
 }
 
@@ -899,6 +902,9 @@ void ipl_main()
 	gfx_con_init();
 
 	display_backlight_pwm_init();
+
+	// Initialize HID input (Joy-Con support)
+	hidInit();
 
 	// Overclock BPMP.
 	bpmp_clk_rate_set(h_cfg.t210b01 ? BPMP_CLK_DEFAULT_BOOST : BPMP_CLK_LOWER_BOOST);

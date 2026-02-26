@@ -62,9 +62,9 @@ TOOLS := $(TOOLSLZ) $(TOOLSB2C)
 
 ################################################################################
 
-.PHONY: all clean release $(LDRDIR) $(TOOLS)
+.PHONY: all clean zip $(LDRDIR) $(TOOLS)
 
-all: $(OUTPUTDIR)/$(TARGET).bin $(LDRDIR)
+all: $(OUTPUTDIR)/$(TARGET).bin zip
 	@echo "--------------------------------------"
 	@echo -n "Uncompr size: "
 	$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET)_unc.bin))
@@ -77,6 +77,13 @@ all: $(OUTPUTDIR)/$(TARGET).bin $(LDRDIR)
 	@echo "Payload Max:  126296 Bytes"
 	@if [ ${BIN_SIZE} -gt 126296 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
 	@echo "--------------------------------------"
+
+zip: $(OUTPUTDIR)/$(TARGET).bin
+	@mkdir -p $(OUTPUTDIR)/zip_temp/bootloader/payloads
+	@cp $(OUTPUTDIR)/$(TARGET).bin $(OUTPUTDIR)/zip_temp/bootloader/payloads/$(TARGET).bin
+	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip bootloader
+	@rm -rf $(OUTPUTDIR)/zip_temp
+	@echo "Created $(OUTPUTDIR)/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip"
 
 clean: $(TOOLS)
 	@rm -rf $(BUILDDIR)
@@ -128,19 +135,3 @@ $(BUILDDIR)/$(TARGET)/%.o: $(BDKDIR)/%.S
 	@mkdir -p "$(@D)"
 	@echo Building $@
 	@$(CC) $(CFLAGS) -c $< -o $@
-
-release: $(OUTPUTDIR)/$(TARGET).bin
-	@echo "--------------------------------------"
-	@echo "Uncompr size: "
-	@$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET).bin))
-	@echo $(BIN_SIZE)" Bytes"
-	@echo "Payload Max:  126296 Bytes"
-	@if [ ${BIN_SIZE} -gt 126296 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
-	@echo "--------------------------------------"
-	@echo "Creating release package..."
-	@mkdir -p bootloader/payloads
-	@mkdir -p Releases
-	@cp $(OUTPUTDIR)/$(TARGET).bin bootloader/payloads/$(TARGET).bin
-	@zip -q -r Releases/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip bootloader
-	@echo "Release created: Releases/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip"
-	@echo "Payload copied to: bootloader/payloads/$(TARGET).bin"

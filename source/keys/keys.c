@@ -27,6 +27,7 @@
 #include <gfx_utils.h>
 #include "../gfx/gfx.h"
 #include "../gfx/tui.h"
+#include "../hid/hid.h"
 #include "../hos/hos.h"
 #include <input/touch.h>
 #include <libs/fatfs/ff.h>
@@ -785,7 +786,7 @@ void derive_amiibo_keys() {
     if (!key_exists(keys->master_key[0])) {
         EPRINTF("Unable to derive master keys for NFC.");
         minerva_change_freq(FREQ_800);
-        btn_wait();
+        hidWait();
         return;
     }
 
@@ -817,7 +818,7 @@ void derive_amiibo_keys() {
 
     gfx_printf("\n" GFX_LANDSCAPE_MARGIN_STR "%kPress any button.\n", COLOR_WHITE);
     minerva_change_freq(FREQ_800);
-    btn_wait();
+    hidWait();
     gfx_clear_grey(0x1B);
 }
 
@@ -884,9 +885,10 @@ void dump_keys() {
     u32 vol_press_start = 0;
     while (true)
     {
-        u32 btn = btn_read();
+        Input_t *inp = hidRead();
+        u32 btn = inp->buttons;
 
-        if (btn & BTN_VOL_UP)
+        if (btn & (BtnVolP | JoyLUp))
         {
             if (vol_press_start == 0)
                 vol_press_start = get_tmr_ms();
@@ -903,11 +905,11 @@ void dump_keys() {
                 msleep(1000);
 
                 // Wait for button release
-                while (btn_read() & BTN_VOL_UP)
+                while (hidRead()->buttons & (BtnVolP | JoyLUp))
                     msleep(10);
 
                 // Wait for any button press to return
-                btn_wait();
+                hidWait();
                 break;
             }
         }

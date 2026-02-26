@@ -18,6 +18,7 @@
 #include <display/di.h>
 #include "gfx.h"
 #include "tui.h"
+#include "../hid/hid.h"
 #include "../config.h"
 #include <power/max17050.h>
 #include <utils/btn.h>
@@ -154,7 +155,7 @@ void *tui_do_menu(menu_t *menu)
 			char title[64];
 			s_printf(title, "[Lockpick RCM Pro v%d.%d.%d]", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
 			gfx_draw_title_bar(title);
-			gfx_draw_bottom_bar("VOL: Move   POWER: Select   Hold VOL+: Screenshot");
+			gfx_draw_bottom_bar("Joy-Con/Btns: Move   A/Power: Select   Cap+: Screenshot");
 
 			// Draw all menu items (use global UI settings)
 			u32 start_x = UI_MENU_START_X;
@@ -224,15 +225,16 @@ void *tui_do_menu(menu_t *menu)
 
 		display_backlight_brightness(h_cfg.backlight, 1000);
 
-		// Non-blocking button read
-		u32 btn = btn_read();
+		// Non-blocking input read using HID system
+		Input_t *inp = hidRead();
+		u32 btn = inp->buttons;
 
 		// Only process button presses (ignore button releases and repeats)
 		if (btn == btn_last)
 		{
 			// Still check for VOL+ hold (1 second) for screenshot
 			static u32 vol_press_start = 0;
-			if (btn & BTN_VOL_UP)
+			if (btn & (BtnVolP | JoyLUp))
 			{
 				if (vol_press_start == 0)
 					vol_press_start = get_tmr_ms();
@@ -278,21 +280,24 @@ void *tui_do_menu(menu_t *menu)
 			continue;
 		}
 
-		if (btn & BTN_VOL_DOWN && idx < (cnt - 1))
+		// Navigation: Joy-Con D-pad, Left Stick, or physical volume buttons
+		if ((btn & (JoyLDown | BtnVolM)) && idx < (cnt - 1))
 			idx++;
-		else if (btn & BTN_VOL_DOWN && idx == (cnt - 1))
+		else if ((btn & (JoyLDown | BtnVolM)) && idx == (cnt - 1))
 		{
 			idx = 0;
 			prev_idx = -1;
 		}
-		else if (btn & BTN_VOL_UP && idx > 0)
+		else if ((btn & (JoyLUp | BtnVolP)) && idx > 0)
 			idx--;
-		else if (btn & BTN_VOL_UP && idx == 0)
+		else if ((btn & (JoyLUp | BtnVolP)) && idx == 0)
 		{
 			idx = cnt - 1;
 			prev_idx = cnt;
 		}
-		if (btn & BTN_POWER)
+
+		// Selection: Joy-Con A button or physical Power button
+		if (btn & (JoyA | BtnPow))
 		{
 			ment_t *ent = &menu->ents[idx];
 			switch (ent->type)
@@ -301,7 +306,7 @@ void *tui_do_menu(menu_t *menu)
 				ent->handler(ent->data);
 				need_full_redraw = 1; // Full redraw needed after handler clears screen
 				// Wait for all buttons to be released to prevent double-trigger
-				while (btn_read()) msleep(10);
+				while (hidRead()->buttons) msleep(10);
 				btn_last = 0;
 				break;
 			case MENT_MENU:
@@ -310,7 +315,7 @@ void *tui_do_menu(menu_t *menu)
 					// Clear full screen after returning from sub-menu
 					gfx_clear_grey(0x1B);
 					// Wait for all buttons to be released to prevent double-trigger
-					while (btn_read()) msleep(10);
+					while (hidRead()->buttons) msleep(10);
 					btn_last = 0;
 					return result;
 				}
@@ -324,7 +329,7 @@ void *tui_do_menu(menu_t *menu)
 				if (!ent->data)
 					return NULL;
 				// Wait for all buttons to be released to prevent double-trigger
-				while (btn_read()) msleep(10);
+				while (hidRead()->buttons) msleep(10);
 				btn_last = 0;
 				break;
 			default:
