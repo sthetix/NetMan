@@ -20,7 +20,6 @@
 
 #include "../config.h"
 #include <gfx_utils.h>
-#include "../gfx/tui.h"
 #include <mem/minerva.h>
 #include <sec/se.h>
 #include <sec/se_t210.h>
@@ -117,15 +116,10 @@ bool decrypt_eticket_rsa_key(key_storage_t *keys, void *buffer, bool is_dev) {
     return true;
 }
 
-void es_decode_tickets(u32 buf_size, titlekey_buffer_t *titlekey_buffer, u32 remaining, u32 total, u32 *titlekey_count, u32 x, u32 y, u32 *pct, u32 *last_pct, bool is_personalized) {
+void es_decode_tickets(u32 buf_size, titlekey_buffer_t *titlekey_buffer, u32 remaining, u32 *titlekey_count, bool is_personalized) {
     ticket_t *curr_ticket = (ticket_t *)titlekey_buffer->read_buffer;
     for (u32 i = 0; i < MIN(buf_size / sizeof(ticket_t), remaining) * sizeof(ticket_t) && curr_ticket->signature_type != 0; i += sizeof(ticket_t), curr_ticket++) {
         minerva_periodic_training();
-        *pct = (total - remaining) * 100 / total;
-        if (*pct > *last_pct && *pct <= 100) {
-            *last_pct = *pct;
-            tui_pbar(x, y, *pct, COLOR_GREEN, 0xFF155500);
-        }
 
         // This is in case an encrypted volatile ticket is left behind
         if (curr_ticket->signature_type != TICKET_SIG_TYPE_RSA2048_SHA256)

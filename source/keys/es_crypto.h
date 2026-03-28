@@ -44,6 +44,6 @@ void es_derive_rsa_kek_original(key_storage_t *keys, void *out_rsa_kek, bool is_
 
 bool decrypt_eticket_rsa_key(key_storage_t *keys, void *buffer, bool is_dev);
 
-void es_decode_tickets(u32 buf_size, titlekey_buffer_t *titlekey_buffer, u32 remaining, u32 total, u32 *titlekey_count, u32 x, u32 y, u32 *pct, u32 *last_pct, bool is_personalized);
+void es_decode_tickets(u32 buf_size, titlekey_buffer_t *titlekey_buffer, u32 remaining, u32 *titlekey_count, bool is_personalized);
 
 #endif

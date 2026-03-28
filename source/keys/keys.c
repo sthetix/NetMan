@@ -255,9 +255,6 @@ static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, title
     u64 br = buf_size;
     u64 offset = 0;
     u32 file_tkey_count = 0;
-    // Convert internal coordinates to external for landscape mode (what tui_pbar expects)
-    u32 save_x = 1279 - gfx_con.y;  // External x (left margin position)
-    u32 save_y = gfx_con.x;           // External y (current line position)
     bool is_personalized = rsa_keypair != NULL;
     const char ticket_bin_path[32] = "/ticket.bin";
     const char ticket_list_bin_path[32] = "/ticket_list.bin";
@@ -313,21 +310,17 @@ static bool _get_titlekeys_from_save(u32 buf_size, const u8 *save_mac_key, title
         se_rsa_key_set(0, rsa_keypair->modulus, sizeof(rsa_keypair->modulus), rsa_keypair->private_exponent, sizeof(rsa_keypair->private_exponent));
 
     offset = 0;
-    u32 pct = 0, last_pct = 0, remaining = file_tkey_count;
+    u32 remaining = file_tkey_count;
     while (offset < ticket_file.size && remaining) {
         if (!save_data_file_read(&ticket_file, &br, offset, titlekey_buffer->read_buffer, buf_size) || titlekey_buffer->read_buffer[0] == 0 || br != buf_size)
             break;
         offset += br;
-        es_decode_tickets(buf_size, titlekey_buffer, remaining, file_tkey_count, &_titlekey_count, save_x, save_y, &pct, &last_pct, is_personalized);
+        es_decode_tickets(buf_size, titlekey_buffer, remaining, &_titlekey_count, is_personalized);
         remaining -= MIN(buf_size / sizeof(ticket_t), remaining);
     }
-    tui_pbar(save_x, save_y, 100, COLOR_GREEN, 0xFF155500);
     f_close(&fp);
     save_free_contexts(save_ctx);
     free(save_ctx);
-
-    // Position already restored by tui_pbar, no need to reset here
-    // Removing this prevents g_YLeftConfig from being overwritten with stale position
 
     *elapsed_us = get_tmr_us() - step_time;
     return true;
