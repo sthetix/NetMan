@@ -52,7 +52,7 @@ CUSTOMDEFINES += -DGFX_INC=$(GFX_INC) -DFFCFG_INC=$(FFCFG_INC)
 WARNINGS := -Wall -Wno-array-bounds -Wno-stringop-overread -Wno-stringop-overflow
 
 ARCH := -march=armv4t -mtune=arm7tdmi -mthumb -mthumb-interwork
-CFLAGS = $(ARCH) -O2 -g -nostdlib -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-inline -std=gnu11 $(WARNINGS) $(CUSTOMDEFINES)
+CFLAGS = $(ARCH) -Os -g -nostdlib -ffunction-sections -fdata-sections -fomit-frame-pointer -std=gnu11 $(WARNINGS) $(CUSTOMDEFINES)
 LDFLAGS = $(ARCH) -nostartfiles -lgcc -Wl,--nmagic,--gc-sections -Xlinker --defsym=IPL_LOAD_ADDR=$(IPL_LOAD_ADDR)
 
 LDRDIR := $(wildcard loader)
@@ -66,16 +66,16 @@ TOOLS := $(TOOLSLZ) $(TOOLSB2C)
 
 all: $(OUTPUTDIR)/$(TARGET).bin zip
 	@echo "--------------------------------------"
-	@echo -n "Uncompr size: "
-	$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET)_unc.bin))
-	@echo $(BIN_SIZE)" Bytes"
-	@echo "Uncompr Max:  140288 Bytes + 3 KiB BSS"
-	@if [ ${BIN_SIZE} -gt 140288 ]; then echo "\e[1;33mUncompr size exceeds limit!\e[0m"; fi
-	@echo -n "Payload size: "
-	$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET).bin))
-	@echo $(BIN_SIZE)" Bytes"
-	@echo "Payload Max:  126296 Bytes"
-	@if [ ${BIN_SIZE} -gt 126296 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
+	@if [ -f $(OUTPUTDIR)/$(TARGET)_unc.bin ]; then \
+		UNC_SIZE=$$(wc -c < $(OUTPUTDIR)/$(TARGET)_unc.bin); \
+		echo "Uncompr size:  $$UNC_SIZE Bytes"; \
+		echo "Uncompr Max:   140288 Bytes + 3 KiB BSS"; \
+		if [ $$UNC_SIZE -gt 140288 ]; then echo "\e[1;33mUncompr size exceeds limit!\e[0m"; fi; \
+	fi
+	@BIN_SIZE=$$(wc -c < $(OUTPUTDIR)/$(TARGET).bin); \
+	echo "Payload size: $$BIN_SIZE Bytes"; \
+	echo "Payload Max:  131072 Bytes (128 KiB)"; \
+	if [ $$BIN_SIZE -gt 131072 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
 	@echo "--------------------------------------"
 
 zip: $(OUTPUTDIR)/$(TARGET).bin

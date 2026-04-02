@@ -108,8 +108,9 @@ void *tui_do_menu(menu_t *menu)
 
 	tui_sbar(true);
 
-	// Initialize button state tracking
-	u32 btn_last = 0; // Start fresh - any button press will trigger
+	// Snapshot current button state so any buttons already held when the menu
+	// opens are treated as "already seen" and don't fire immediately.
+	u32 btn_last = hidRead()->buttons;
 
 	while (true)
 	{
@@ -303,14 +304,21 @@ void *tui_do_menu(menu_t *menu)
 			switch (ent->type)
 			{
 			case MENT_HANDLER:
+				// Wait for button release BEFORE calling handler so that any
+				// menus opened inside the handler don't inherit this press.
+				while (hidRead()->buttons) msleep(10);
+				btn_last = 0;
 				ent->handler(ent->data);
 				need_full_redraw = 1; // Full redraw needed after handler clears screen
-				// Wait for all buttons to be released to prevent double-trigger
+				// Also wait after handler returns (it may have left buttons held).
 				while (hidRead()->buttons) msleep(10);
 				btn_last = 0;
 				break;
 			case MENT_MENU:
 				{
+					// Wait for button release before entering sub-menu for same reason.
+					while (hidRead()->buttons) msleep(10);
+					btn_last = 0;
 					void *result = tui_do_menu(ent->menu);
 					// Clear full screen after returning from sub-menu
 					gfx_clear_grey(0x1B);
@@ -324,6 +332,9 @@ void *tui_do_menu(menu_t *menu)
 			case MENT_BACK:
 				return NULL;
 			case MENT_HDLR_RE:
+				// Wait for button release before calling handler (same as MENT_HANDLER).
+				while (hidRead()->buttons) msleep(10);
+				btn_last = 0;
 				ent->handler(ent);
 				need_full_redraw = 1; // Full redraw needed after handler clears screen
 				if (!ent->data)

@@ -238,7 +238,7 @@ void launch_tools()
 			}
 		}
 
-		if (i > 0)
+		if (i > 0 || i_off > 2)
 		{
 			memset(&ments[i + i_off], 0, sizeof(ment_t));
 			menu_t menu = { ments, "Choose file", 0, 0 };
