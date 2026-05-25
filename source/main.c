@@ -18,6 +18,7 @@
  */
 
 #include <string.h>
+#include <stdlib.h>
 
 #include "config.h"
 #include <display/di.h>
@@ -25,7 +26,6 @@
 #include "gfx/gfx.h"
 #include "gfx/tui.h"
 #include "hid/hid.h"
-#include "keys/keys.h"
 #include <libs/fatfs/ff.h>
 #include <mem/heap.h>
 #include <mem/minerva.h>
@@ -35,9 +35,6 @@
 #include <rtc/max77620-rtc.h>
 #include <soc/bpmp.h>
 #include <soc/hw_init.h>
-#include "storage/emummc.h"
-#include "storage/nx_emmc.h"
-#include "storage/nx_emmc_bis.h"
 #include <storage/nx_sd.h>
 #include <storage/sdmmc.h>
 #include <utils/btn.h>
@@ -47,8 +44,6 @@
 #include <utils/list.h>
 #include <utils/sprintf.h>
 #include <utils/util.h>
-
-#include "keys/keys.h"
 
 hekate_config h_cfg;
 boot_cfg_t __attribute__((section ("._boot_cfg"))) b_cfg;
@@ -303,78 +298,424 @@ void launch_hekate()
 	}
 }
 
-void dump_sysnand()
+#define EXOSPHERE_PATH "sd:/exosphere.ini"
+#define HOSTS_SYSMMC_PATH "sd:/atmosphere/hosts/sysmmc.txt"
+#define SYS_SETTINGS_PATH "sd:/atmosphere/config/system_settings.ini"
+#define SYS_PATCH_CONFIG_PATH "sd:/config/sys-patch/config.ini"
+
+const char *hosts_block_all =
+"# Nintendo Servers\n"
+"127.0.0.1 *nintendo.*\n"
+"127.0.0.1 *nintendoswitch.*\n"
+"127.0.0.1 *.nintendo.com\n"
+"127.0.0.1 *.nintendo.net\n"
+"127.0.0.1 *.nintendo.jp\n"
+"127.0.0.1 *.nintendo.co.jp\n"
+"127.0.0.1 *.nintendo.co.uk\n"
+"127.0.0.1 *.nintendo-europe.com\n"
+"127.0.0.1 *.nintendowifi.net\n"
+"127.0.0.1 *.nintendo.es\n"
+"127.0.0.1 *.nintendo.co.kr\n"
+"127.0.0.1 *.nintendo.tw\n"
+"127.0.0.1 *.nintendo.com.hk\n"
+"127.0.0.1 *.nintendo.com.au\n"
+"127.0.0.1 *.nintendo.co.nz\n"
+"127.0.0.1 *.nintendo.at\n"
+"127.0.0.1 *.nintendo.be\n"
+"127.0.0.1 *.nintendods.cz\n"
+"127.0.0.1 *.nintendo.dk\n"
+"127.0.0.1 *.nintendo.de\n"
+"127.0.0.1 *.nintendo.fi\n"
+"127.0.0.1 *.nintendo.fr\n"
+"127.0.0.1 *.nintendo.gr\n"
+"127.0.0.1 *.nintendo.hu\n"
+"127.0.0.1 *.nintendo.it\n"
+"127.0.0.1 *.nintendo.nl\n"
+"127.0.0.1 *.nintendo.no\n"
+"127.0.0.1 *.nintendo.pt\n"
+"127.0.0.1 *.nintendo.ru\n"
+"127.0.0.1 *.nintendo.co.za\n"
+"127.0.0.1 *.nintendo.se\n"
+"127.0.0.1 *.nintendo.ch\n"
+"127.0.0.1 *.nintendoswitch.com\n"
+"127.0.0.1 *.nintendoswitch.com.cn\n"
+"127.0.0.1 *.nintendoswitch.cn\n"
+"127.0.0.1 receive-*.dg.srv.nintendo.net\n"
+"127.0.0.1 receive-*.er.srv.nintendo.net\n"
+"# Nintendo CDN\n"
+"95.216.149.205 conntest.nintendowifi.net\n"
+"95.216.149.205 ctest.cdn.nintendo.net\n";
+
+const char *hosts_open = "# No Nintendo server blocks\n";
+
+const char *exosphere_sysmmc_blocked =
+"[exosphere]\n"
+"debugmode=1\n"
+"debugmode_user=0\n"
+"disable_user_exception_handlers=0\n"
+"enable_user_pmu_access=0\n"
+"blank_prodinfo_sysmmc=1\n"
+"blank_prodinfo_emummc=0\n"
+"allow_writing_to_cal_sysmmc=0\n"
+"log_port=0\n"
+"log_baud_rate=115200\n"
+"log_inverted=0\n";
+
+const char *exosphere_sysmmc_online =
+"[exosphere]\n"
+"debugmode=1\n"
+"debugmode_user=0\n"
+"disable_user_exception_handlers=0\n"
+"enable_user_pmu_access=0\n"
+"blank_prodinfo_sysmmc=0\n"
+"blank_prodinfo_emummc=0\n"
+"allow_writing_to_cal_sysmmc=0\n"
+"log_port=0\n"
+"log_baud_rate=115200\n"
+"log_inverted=0\n";
+
+const char *sys_settings_offline =
+"[atmosphere]\n"
+"enable_dns_mitm = u8!0x1\n"
+"add_defaults_to_dns_hosts = u8!0x1\n";
+
+const char *sys_settings_mitm_on_defaults_off =
+"[atmosphere]\n"
+"enable_dns_mitm = u8!0x1\n"
+"add_defaults_to_dns_hosts = u8!0x0\n";
+
+const char *sys_settings_both_online =
+"[atmosphere]\n"
+"enable_dns_mitm = u8!0x0\n"
+"add_defaults_to_dns_hosts = u8!0x0\n";
+
+static bool save_file(const char *path, const char *data, u32 size);
+
+static bool save_sys_patch_config(bool enable_network_patches, bool block_firmware_updates)
 {
-	h_cfg.emummc_force_disable = true;
-	emu_cfg.enabled = false;
-	dump_keys();
-	h_cfg.emummc_force_disable = false; // Reset flag to allow subsequent emuMMC dumps
+	char config[768];
+	s_printf(config,
+		"[options]\n"
+		"patch_sysmmc=1\n"
+		"patch_emummc=1\n"
+		"enable_logging=1\n"
+		"version_skip=1\n"
+		"[olsc]\n"
+		"olsc_6.0.0-14.1.2=%d\n"
+		"olsc_15.0.0-18.1.0=%d\n"
+		"olsc_19.0.0+=%d\n"
+		"[nifm]\n"
+		"ctest_1.0.0-19.0.1=%d\n"
+		"ctest_20.0.0+=%d\n"
+		"[nim]\n"
+		"blankcal0crashfix_17.0.0+=%d\n"
+		"blockfirmwareupdates_1.0.0-5.1.0=%d\n"
+		"blockfirmwareupdates_6.0.0-6.2.0=%d\n"
+		"blockfirmwareupdates_7.0.0-10.2.0=%d\n"
+		"blockfirmwareupdates_11.0.0-11.0.1=%d\n"
+		"blockfirmwareupdates_12.0.0+=%d\n",
+		enable_network_patches ? 1 : 0,
+		enable_network_patches ? 1 : 0,
+		enable_network_patches ? 1 : 0,
+		enable_network_patches ? 1 : 0,
+		enable_network_patches ? 1 : 0,
+		enable_network_patches ? 1 : 0,
+		block_firmware_updates ? 1 : 0,
+		block_firmware_updates ? 1 : 0,
+		block_firmware_updates ? 1 : 0,
+		block_firmware_updates ? 1 : 0,
+		block_firmware_updates ? 1 : 0);
+
+	return save_file(SYS_PATCH_CONFIG_PATH, config, strlen(config));
 }
 
-void dump_emunand()
+static bool save_file(const char *path, const char *data, u32 size)
 {
-	if (h_cfg.emummc_force_disable)
-		return;
-	emu_cfg.enabled = true;
-	dump_keys();
+	FIL fp;
+	if (f_open(&fp, path, FA_CREATE_ALWAYS | FA_WRITE))
+	{
+		EPRINTFARGS("Failed to open %s for writing!", path);
+		return false;
+	}
+
+	UINT bw;
+	if (f_write(&fp, data, size, &bw) || bw != size)
+	{
+		f_close(&fp);
+		EPRINTFARGS("Failed to write to %s!", path);
+		return false;
+	}
+
+	f_close(&fp);
+	return true;
 }
 
-void dump_amiibo_keys()
+static char *read_file(const char *path)
+{
+	FIL fp;
+	if (f_open(&fp, path, FA_READ))
+		return NULL;
+
+	u32 size = f_size(&fp);
+	char *buf = malloc(size + 1);
+	if (!buf)
+	{
+		f_close(&fp);
+		return NULL;
+	}
+
+	UINT br;
+	if (f_read(&fp, buf, size, &br) || br != size)
+	{
+		f_close(&fp);
+		free(buf);
+		return NULL;
+	}
+
+	f_close(&fp);
+	buf[size] = 0;
+	return buf;
+}
+
+static bool update_dns_mitm_settings(bool enable_mitm, bool enable_defaults)
+{
+	char *content = read_file(SYS_SETTINGS_PATH);
+
+	if (!content)
+	{
+		const char *tmpl = enable_mitm
+			? (enable_defaults ? sys_settings_offline : sys_settings_mitm_on_defaults_off)
+			: sys_settings_both_online;
+		return save_file(SYS_SETTINGS_PATH, tmpl, strlen(tmpl));
+	}
+
+	char *dns_mitm_pos = strstr(content, "enable_dns_mitm = u8!0x");
+	if (dns_mitm_pos)
+		dns_mitm_pos[strlen("enable_dns_mitm = u8!0x")] = enable_mitm ? '1' : '0';
+
+	char *defaults_pos = strstr(content, "add_defaults_to_dns_hosts = u8!0x");
+	if (defaults_pos)
+		defaults_pos[strlen("add_defaults_to_dns_hosts = u8!0x")] = enable_defaults ? '1' : '0';
+
+	if (!dns_mitm_pos || !defaults_pos)
+	{
+		free(content);
+		const char *tmpl = enable_mitm
+			? (enable_defaults ? sys_settings_offline : sys_settings_mitm_on_defaults_off)
+			: sys_settings_both_online;
+		return save_file(SYS_SETTINGS_PATH, tmpl, strlen(tmpl));
+	}
+
+	bool result = save_file(SYS_SETTINGS_PATH, content, strlen(content));
+	free(content);
+	return result;
+}
+
+static void draw_netman_screen(const char *subtitle)
 {
 	gfx_clear_grey(0x1B);
-	gfx_con_setpos(0, 0);
-	derive_amiibo_keys();
+
+	char title[64];
+	s_printf(title, "[NetMan v%d.%d.%d] - %s", LP_VER_MJ, LP_VER_MN, LP_VER_BF, subtitle);
+	gfx_draw_title_bar(title);
+	gfx_draw_bottom_bar("Hold VOL+: Screenshot   Any Button: Return");
+	gfx_con_setpos(UI_CONTENT_START_X, UI_CONTENT_START_Y);
 }
 
-void dump_prodinfo();
-void restore_prodinfo();
+static void wait_for_return()
+{
+	gfx_printf("\n%kPress any button to return.", COLOR_CYAN_L);
+	msleep(500);
 
-void dump_mariko_partial_keys();
+	u32 vol_press_start = 0;
+	while (true)
+	{
+		Input_t *inp = hidRead();
+		u32 btn = inp->buttons;
 
-ment_t ment_partials[] = {
-	MDEF_BACK(COLOR_TURQUOISE),
-	MDEF_CHGLINE(),
-	MDEF_CAPTION("Dumps results of writing zeros", COLOR_SOFT_WHITE),
-	MDEF_CAPTION("over 32-bit portions of each keyslot", COLOR_SOFT_WHITE),
-	MDEF_CAPTION("for bruteforce recovery on PC.", COLOR_SOFT_WHITE),
-	MDEF_CHGLINE(),
-	MDEF_CAPTION("Includes Mariko KEK, BEK, unique SBK", COLOR_SOFT_WHITE),
-	MDEF_CHGLINE(),
-	MDEF_CAPTION("Not useful for most users.", COLOR_SOFT_WHITE),
-	MDEF_CHGLINE(),
-	MDEF_CAPTION("IMPORTANT: Run BEFORE SysMMC/EmuMMC dump!", COLOR_WARNING),
-	MDEF_CAPTION("Keyslots must have factory keys!", COLOR_WARNING),
-	MDEF_CHGLINE(),
-	MDEF_CAPTION("Warning: wipes keyslots!", COLOR_WARNING),
-	MDEF_CAPTION("Console must restart!", COLOR_WARNING),
-	MDEF_CAPTION("Modchip must run again!", COLOR_WARNING),
-	MDEF_CAPTION("---------------", COLOR_WHITE),
-	MDEF_HANDLER("Dump Mariko Partials", dump_mariko_partial_keys, COLOR_TURQUOISE),
-	MDEF_END()
-};
+		if (btn & (BtnVolP | JoyLUp))
+		{
+			if (vol_press_start == 0)
+				vol_press_start = get_tmr_ms();
+			else if (get_tmr_ms() - vol_press_start > 2000)
+			{
+				int save_fb_to_bmp();
+				int res = save_fb_to_bmp();
 
-menu_t menu_partials = { ment_partials, NULL, 0, 0 };
+				gfx_con_setpos(UI_NOTIFY_X, UI_NOTIFY_Y);
+				if (!res)
+					gfx_printf("%kScreenshot saved!%k                              ", COLOR_CYAN_L, COLOR_SOFT_WHITE);
+				else
+					gfx_printf("%kScreenshot failed!%k                             ", COLOR_ERROR, COLOR_SOFT_WHITE);
+
+				msleep(1000);
+				vol_press_start = 0;
+
+				while (hidRead()->buttons & (BtnVolP | JoyLUp))
+					msleep(10);
+			}
+		}
+		else
+		{
+			vol_press_start = 0;
+			if (btn)
+				break;
+		}
+
+		msleep(10);
+	}
+
+	while (hidRead()->buttons)
+		msleep(10);
+}
+
+void set_default_config()
+{
+	draw_netman_screen("Blocking sysMMC");
+	gfx_printf("%kBlocking Nintendo connectivity for sysMMC.\n\n", COLOR_WHITE);
+
+	if (!sd_mount())
+	{
+		EPRINTF("Failed to mount SD card!");
+		goto out;
+	}
+
+	f_mkdir("sd:/atmosphere");
+	f_mkdir("sd:/atmosphere/hosts");
+	f_mkdir("sd:/atmosphere/config");
+	f_mkdir("sd:/config");
+	f_mkdir("sd:/config/sys-patch");
+
+	gfx_printf("%kApplying protected sysMMC settings...\n\n", COLOR_WHITE);
+	gfx_printf("Prodinfo blanking: %s\n", save_file(EXOSPHERE_PATH, exosphere_sysmmc_blocked, strlen(exosphere_sysmmc_blocked)) ? "ON" : "Failed");
+	gfx_printf("Nintendo hosts block: %s\n", save_file(HOSTS_SYSMMC_PATH, hosts_block_all, strlen(hosts_block_all)) ? "ON" : "Failed");
+	gfx_printf("DNS MITM: %s\n", update_dns_mitm_settings(true, false) ? "ON, defaults OFF" : "Failed");
+	gfx_printf("sys-patch net patches: %s\n", save_sys_patch_config(true, true) ? "ON" : "Failed");
+	gfx_printf("Firmware update block: ON\n");
+	gfx_printf("\n%ksysMMC Nintendo connectivity is blocked.\n", COLOR_GREEN);
+
+out:
+	sd_end();
+	wait_for_return();
+}
+
+void set_sysmmc_online()
+{
+	draw_netman_screen("Allowing sysMMC");
+	gfx_printf("%kWARNING: sysMMC CFW will connect to Nintendo.\n", COLOR_RED);
+	gfx_printf("%kPress VOL+ to continue or any other button to cancel.\n\n", COLOR_WHITE);
+
+	Input_t *inp = hidWait();
+	if (!(inp->buttons & (BtnVolP | JoyLUp)))
+	{
+		gfx_printf("%kCancelled.\n", COLOR_WHITE);
+		wait_for_return();
+		return;
+	}
+
+	draw_netman_screen("Allowing sysMMC");
+	if (!sd_mount())
+	{
+		EPRINTF("Failed to mount SD card!");
+		goto out;
+	}
+
+	f_mkdir("sd:/atmosphere");
+	f_mkdir("sd:/atmosphere/hosts");
+	f_mkdir("sd:/atmosphere/config");
+	f_mkdir("sd:/config");
+	f_mkdir("sd:/config/sys-patch");
+
+	gfx_printf("%kApplying open sysMMC settings...\n\n", COLOR_WHITE);
+	gfx_printf("Prodinfo blanking: %s\n", save_file(EXOSPHERE_PATH, exosphere_sysmmc_online, strlen(exosphere_sysmmc_online)) ? "OFF" : "Failed");
+	gfx_printf("Nintendo hosts block: %s\n", save_file(HOSTS_SYSMMC_PATH, hosts_open, strlen(hosts_open)) ? "OFF" : "Failed");
+	gfx_printf("DNS MITM: %s\n", update_dns_mitm_settings(true, false) ? "ON, defaults OFF" : "Failed");
+	gfx_printf("sys-patch net patches: %s\n", save_sys_patch_config(true, false) ? "ON, updates allowed" : "Failed");
+	gfx_printf("Firmware update block: OFF\n");
+	gfx_printf("\n%ksysMMC can connect to Nintendo servers.\n", COLOR_GREEN);
+
+out:
+	sd_end();
+	wait_for_return();
+}
+
+void show_current_config()
+{
+	draw_netman_screen("Current Status");
+
+	if (!sd_mount())
+	{
+		EPRINTF("Failed to mount SD card!");
+		goto out;
+	}
+
+	bool sys_online = false;
+	char *buf = read_file(HOSTS_SYSMMC_PATH);
+	if (buf)
+	{
+		sys_online = strstr(buf, "# No Nintendo server blocks") != NULL;
+		free(buf);
+	}
+
+	gfx_printf("%ksysMMC Nintendo Connectivity\n\n", COLOR_WHITE);
+	if (sys_online)
+		gfx_printf("Nintendo servers: %kALLOWED\n", COLOR_RED);
+	else
+		gfx_printf("Nintendo servers: %kBLOCKED\n", COLOR_GREEN);
+
+	buf = read_file(SYS_SETTINGS_PATH);
+	if (buf)
+	{
+		bool mitm_on = strstr(buf, "enable_dns_mitm = u8!0x1") != NULL;
+		bool defaults_on = strstr(buf, "add_defaults_to_dns_hosts = u8!0x1") != NULL;
+		gfx_printf("%kDNS MITM: %s\n", COLOR_WHITE, mitm_on ? "ON" : "OFF");
+		gfx_printf("%kDefault DNS blocks: %s\n", COLOR_WHITE, defaults_on ? "ON" : "OFF");
+		free(buf);
+	}
+	else
+		gfx_printf("\n%kDNS MITM: Could not read status\n", COLOR_WARNING);
+
+	buf = read_file(SYS_PATCH_CONFIG_PATH);
+	if (buf)
+	{
+		bool olsc = strstr(buf, "olsc_19.0.0+=1") != NULL || strstr(buf, "olsc_15.0.0-18.1.0=1") != NULL || strstr(buf, "olsc_6.0.0-14.1.2=1") != NULL;
+		bool ctest = strstr(buf, "ctest_20.0.0+=1") != NULL || strstr(buf, "ctest_1.0.0-19.0.1=1") != NULL;
+		bool blankcal_fix = strstr(buf, "blankcal0crashfix_17.0.0+=1") != NULL;
+		bool block_updates = strstr(buf, "blockfirmwareupdates_12.0.0+=1") != NULL;
+		gfx_printf("\n%ksys-patch: ACTIVE\n", COLOR_WHITE);
+		gfx_printf("%kOLSC patch: %s\n", COLOR_WHITE, olsc ? "ON" : "OFF");
+		gfx_printf("%kConnection test patch: %s\n", COLOR_WHITE, ctest ? "ON" : "OFF");
+		gfx_printf("%kBlank CAL0 fix: %s\n", COLOR_WHITE, blankcal_fix ? "ON" : "OFF");
+		gfx_printf("%kFirmware update block: %s\n", COLOR_WHITE, block_updates ? "ON" : "OFF");
+		free(buf);
+	}
+	else
+		gfx_printf("\n%ksys-patch: Could not read status\n", COLOR_WARNING);
+
+out:
+	sd_end();
+	wait_for_return();
+}
+
+void hekate_launch()
+{
+	launch_payload("bootloader/update.bin", false);
+}
 
 power_state_t STATE_POWER_OFF           = POWER_OFF_RESET;
-power_state_t STATE_REBOOT_FULL         = POWER_OFF_REBOOT;
-power_state_t STATE_REBOOT_RCM          = REBOOT_RCM;
-power_state_t STATE_REBOOT_BYPASS_FUSES = REBOOT_BYPASS_FUSES;
 
 ment_t ment_top[] = {
-	MDEF_HANDLER("Dump from SysMMC", dump_sysnand, COLOR_TURQUOISE),
-	MDEF_HANDLER("Dump from EmuMMC", dump_emunand, COLOR_TURQUOISE),
-	MDEF_CAPTION("---------------", COLOR_WHITE),
-	MDEF_HANDLER("Restore PRODINFO", restore_prodinfo, COLOR_TURQUOISE),
-	MDEF_CAPTION("---------------", COLOR_WHITE),
-	MDEF_HANDLER("Dump Amiibo Keys", dump_amiibo_keys, COLOR_TURQUOISE),
-	MDEF_MENU("Dump Mariko Partials (requires reboot)", &menu_partials, COLOR_TURQUOISE),
-	MDEF_CAPTION("---------------", COLOR_WHITE),
+	MDEF_CAPTION("--- sysMMC Connectivity ---", COLOR_WHITE),
+	MDEF_HANDLER("Block Nintendo Connectivity", set_default_config, COLOR_TURQUOISE),
+	MDEF_HANDLER("Allow Nintendo Connectivity", set_sysmmc_online, COLOR_TURQUOISE),
+	MDEF_CHGLINE(),
+	MDEF_CAPTION("--- Information ---", COLOR_WHITE),
+	MDEF_HANDLER("View Current Status", show_current_config, COLOR_TURQUOISE),
+	MDEF_CHGLINE(),
+	MDEF_CAPTION("--- Navigation ---", COLOR_WHITE),
 	MDEF_HANDLER("Payloads...", launch_tools, COLOR_TURQUOISE),
-	MDEF_HANDLER("Reboot to hekate", launch_hekate, COLOR_TURQUOISE),
-	MDEF_CAPTION("---------------", COLOR_WHITE),
-	MDEF_HANDLER_EX("Reboot (OFW)", &STATE_REBOOT_BYPASS_FUSES, power_set_state_ex, COLOR_TURQUOISE),
-	MDEF_HANDLER_EX("Reboot (RCM)", &STATE_REBOOT_RCM, power_set_state_ex, COLOR_TURQUOISE),
-	MDEF_HANDLER_EX("Power off", &STATE_POWER_OFF, power_set_state_ex, COLOR_TURQUOISE),
+	MDEF_HANDLER("Back to hekate", hekate_launch, COLOR_TURQUOISE),
+	MDEF_HANDLER_EX("Power Off", &STATE_POWER_OFF, power_set_state_ex, COLOR_TURQUOISE),
 	MDEF_END()
 };
 
@@ -385,485 +726,6 @@ void grey_out_menu_item(ment_t *menu)
 	menu->type = MENT_CAPTION;
 	menu->color = 0xFF555555;
 	menu->handler = NULL;
-}
-
-void dump_prodinfo()
-{
-	gfx_clear_grey(0x1B);
-
-	// Draw title bar and bottom bar
-	char title[64];
-	s_printf(title, "[Lockpick RCM Pro v%d.%d.%d] - Dump PRODINFO", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
-	gfx_draw_title_bar(title);
-	gfx_draw_bottom_bar("Hold VOL+: Screenshot   Any Button: Return");
-
-	// Reset console position below title bar (use global UI settings)
-	gfx_con_setpos(UI_CONTENT_START_X, UI_CONTENT_START_Y);
-
-	// Silently derive BIS keys and load them into SE keyslots
-	gfx_printf("%kBIS keys...\n", COLOR_WHITE);
-	if (!derive_bis_keys_silently()) {
-		gfx_printf("%kBIS failed!\n", COLOR_RED);
-		gfx_printf("%kTry different payload.\n\n", COLOR_RED);
-		goto out_wait;
-	}
-	gfx_printf("%kBIS OK.\n\n", COLOR_GREEN);
-
-	// Mount SD card
-	if (!sd_mount()) {
-		EPRINTF("SD mount failed.");
-		goto out_wait;
-	}
-
-	// Initialize eMMC storage
-	gfx_printf("%keMMC init...\n", COLOR_WHITE);
-	if (emummc_storage_init_mmc()) {
-		EPRINTF("MMC init failed.");
-		goto out;
-	}
-
-	// Parse GPT to find PRODINFO partition
-	gfx_printf("%kParsing GPT...\n", COLOR_WHITE);
-	LIST_INIT(gpt);
-	nx_emmc_gpt_parse(&gpt, &emmc_storage);
-
-	emmc_part_t *prodinfo_part = nx_emmc_part_find(&gpt, "PRODINFO");
-	if (!prodinfo_part) {
-		EPRINTF("PRODINFO not found.");
-		nx_emmc_gpt_free(&gpt);
-		goto out;
-	}
-
-	// Initialize BIS encryption for PRODINFO
-	gfx_printf("%kBIS init...\n", COLOR_WHITE);
-	nx_emmc_bis_init(prodinfo_part);
-
-	// Calculate partition size
-	u32 partition_sectors = prodinfo_part->lba_end - prodinfo_part->lba_start + 1;
-	u32 partition_size = partition_sectors * NX_EMMC_BLOCKSIZE;
-
-	gfx_printf("%kSize: %d KB\n", COLOR_CYAN_L, partition_size / 1024);
-
-	// Create output directory
-	f_mkdir("sd:/switch");
-
-	// Open output file
-	FIL fp;
-	if (f_open(&fp, "sd:/switch/PRODINFO.bin", FA_CREATE_ALWAYS | FA_WRITE)) {
-		EPRINTF("File create failed.");
-		nx_emmc_gpt_free(&gpt);
-		goto out;
-	}
-
-	// Allocate buffer for reading (256KB at a time)
-	const u32 buf_size = 0x40000; // 256KB
-	u8 *buffer = (u8 *)malloc(buf_size);
-	if (!buffer) {
-		EPRINTF("Buffer alloc failed.");
-		f_close(&fp);
-		nx_emmc_gpt_free(&gpt);
-		goto out;
-	}
-
-	// Dump partition sector by sector with progress
-	gfx_printf("%kDumping...\n", COLOR_WHITE);
-	u32 num_sectors_per_read = buf_size / NX_EMMC_BLOCKSIZE;
-	u32 sectors_read = 0;
-	u32 prev_pct = 200;
-
-	while (sectors_read < partition_sectors) {
-		u32 sectors_to_read = MIN(num_sectors_per_read, partition_sectors - sectors_read);
-
-		// Read and decrypt sectors
-		if (nx_emmc_bis_read(sectors_read, sectors_to_read, buffer)) {
-			gfx_printf("%kRead err @ %d\n", COLOR_RED, sectors_read);
-			break;
-		}
-
-		// Write to file
-		u32 bytes_to_write = sectors_to_read * NX_EMMC_BLOCKSIZE;
-		UINT bytes_written;
-		if (f_write(&fp, buffer, bytes_to_write, &bytes_written) || bytes_written != bytes_to_write) {
-			gfx_printf("%kWrite err @ %d\n", COLOR_RED, sectors_read);
-			break;
-		}
-
-		sectors_read += sectors_to_read;
-
-		// Update progress
-		u32 pct = (sectors_read * 100) / partition_sectors;
-		if (pct != prev_pct && pct % 5 == 0) {
-			u32 cx, cy;
-			gfx_con_getpos(&cx, &cy);
-			gfx_con_setpos(30, cy);
-			gfx_printf("%kProgress: %d%%", COLOR_CYAN_L, pct);
-			prev_pct = pct;
-		}
-	}
-
-	// Cleanup
-	free(buffer);
-	f_close(&fp);
-	nx_emmc_bis_finalize();
-	nx_emmc_gpt_free(&gpt);
-
-	if (sectors_read == partition_sectors) {
-		gfx_printf("\n%kSaved to sd:/switch/PRODINFO.bin\n", COLOR_GREEN);
-	} else {
-		gfx_printf("\n%kDump incomplete!\n", COLOR_RED);
-	}
-
-out:
-	emummc_storage_end();
-	sd_end();
-
-out_wait:
-	// Wait for button press with hold detection for screenshot
-	u32 vol_press_start = 0;
-	while (true)
-	{
-		Input_t *inp = hidRead();
-		u32 btn = inp->buttons;
-
-		if (btn & (BtnVolP | JoyLUp))
-		{
-			if (vol_press_start == 0)
-				vol_press_start = get_tmr_ms();
-			else if (get_tmr_ms() - vol_press_start > 1000)
-			{
-				// Button held for 1 second - take screenshot
-				int save_fb_to_bmp();
-				int res = save_fb_to_bmp();
-				if (!res)
-					gfx_printf("\n%kScreenshot saved!\n", COLOR_GREEN);
-				else
-					gfx_printf("\n%kScreenshot failed!\n", COLOR_RED);
-
-				msleep(1000);
-
-				// Wait for button release
-				while (hidRead()->buttons & (BtnVolP | JoyLUp))
-					msleep(10);
-
-				// Wait for any button press to return
-				hidWait();
-				break;
-			}
-		}
-		else
-		{
-			vol_press_start = 0;
-			// Any other button pressed - return immediately
-			if (btn)
-				break;
-		}
-
-		msleep(10);
-	}
-}
-
-void restore_prodinfo()
-{
-	gfx_clear_grey(0x1B);
-
-	// Draw title bar and bottom bar
-	char title[64];
-	s_printf(title, "[Lockpick RCM Pro v%d.%d.%d] - Restore PRODINFO", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
-	gfx_draw_title_bar(title);
-	gfx_draw_bottom_bar("Hold VOL+: Screenshot   Any Button: Return");
-
-	// Reset console position below title bar (use global UI settings)
-	gfx_con_setpos(UI_CONTENT_START_X, UI_CONTENT_START_Y);
-
-	// Warning with left margin
-	gfx_printf("%kWARNING: This will overwrite your PRODINFO!\n", COLOR_RED);
-	gfx_printf("%kMake sure you have a backup before proceeding!\n", COLOR_RED);
-	gfx_printf("\n%kPress VOL+ to continue or any other button to cancel.\n", COLOR_WHITE);
-
-	Input_t *inp = hidWait();
-	if (!(inp->buttons & (BtnVolP | JoyLUp))) {
-		gfx_printf("%kCancelled.\n", COLOR_WHITE);
-		goto out_wait;
-	}
-
-	// Silently derive BIS keys and load them into SE keyslots
-	gfx_printf("\n%kDeriving BIS encryption keys...\n", COLOR_WHITE);
-	if (!derive_bis_keys_silently()) {
-		gfx_printf("%kBIS derive failed! Try different payload.\n", COLOR_RED);
-		goto out_wait;
-	}
-	gfx_printf("%kBIS keys derived successfully.\n", COLOR_GREEN);
-
-	// Mount SD card
-	if (!sd_mount()) {
-		EPRINTF("SD mount failed.");
-		goto out_wait;
-	}
-
-	// Get current device eMMC ID
-	char emmc_id[16] = {0};
-	if (!get_emmc_id_external(emmc_id)) {
-		gfx_printf("%keMMC ID failed!\n", COLOR_RED);
-		goto out;
-	}
-
-	gfx_printf("%kCurrent device ID: %s\n", COLOR_CYAN_L, emmc_id);
-
-	// Build paths for new folder structure
-	char hekate_path[80];
-	char enc_path[80];
-	char dec_path[80];
-	char old_dec_path[] = "sd:/switch/prodinfo.dec";
-	char old_enc_path[] = "sd:/switch/prodinfo.enc";
-
-	s_printf(hekate_path, "sd:/backup/%s/partitions/PRODINFO", emmc_id);
-	s_printf(enc_path, "sd:/backup/%s/dumps/prodinfo.enc", emmc_id);
-	s_printf(dec_path, "sd:/backup/%s/dumps/prodinfo.dec", emmc_id);
-
-	// Check which PRODINFO file exists - priority order
-	FIL fp;
-	bool is_encrypted = false;
-	bool found = false;
-	char found_path[80] = {0};
-
-	// 1. Check Hekate-compatible location (encrypted, same device)
-	if (f_open(&fp, hekate_path, FA_READ) == FR_OK) {
-		is_encrypted = true;
-		found = true;
-		strcpy(found_path, hekate_path);
-		gfx_printf("\n%kFound PRODINFO backup: partitions/PRODINFO\n", COLOR_GREEN);
-		gfx_printf("%kSource device: %s (MATCH)\n", COLOR_GREEN, emmc_id);
-	}
-	// 2. Check new decrypted location (same device)
-	else if (f_open(&fp, dec_path, FA_READ) == FR_OK) {
-		is_encrypted = false;
-		found = true;
-		strcpy(found_path, dec_path);
-		gfx_printf("\n%kFound PRODINFO backup: dumps/prodinfo.dec\n", COLOR_GREEN);
-		gfx_printf("%kSource device: %s (MATCH)\n", COLOR_GREEN, emmc_id);
-	}
-	// 3. Check new encrypted location (same device)
-	else if (f_open(&fp, enc_path, FA_READ) == FR_OK) {
-		is_encrypted = true;
-		found = true;
-		strcpy(found_path, enc_path);
-		gfx_printf("\n%kFound PRODINFO backup: dumps/prodinfo.enc\n", COLOR_GREEN);
-		gfx_printf("%kSource device: %s (MATCH)\n", COLOR_GREEN, emmc_id);
-	}
-	// 4. Fall back to old location - decrypted (backward compatibility)
-	else if (f_open(&fp, old_dec_path, FA_READ) == FR_OK) {
-		is_encrypted = false;
-		found = true;
-		strcpy(found_path, old_dec_path);
-		gfx_printf("\n%k/switch/prodinfo.dec\n", COLOR_RED);
-		gfx_printf("%kCannot verify device!\n", COLOR_RED);
-	}
-	// 5. Fall back to old location - encrypted (backward compatibility)
-	else if (f_open(&fp, old_enc_path, FA_READ) == FR_OK) {
-		is_encrypted = true;
-		found = true;
-		strcpy(found_path, old_enc_path);
-		gfx_printf("\n%k/switch/prodinfo.enc\n", COLOR_RED);
-		gfx_printf("%kCannot verify device!\n", COLOR_RED);
-	}
-
-	// No backup found anywhere
-	if (!found) {
-		gfx_printf("%kNo backup found! Dump PRODINFO first!\n", COLOR_RED);
-		goto out;
-	}
-
-	// Get file size
-	u32 file_size = f_size(&fp);
-
-	// Initialize eMMC storage
-	gfx_printf("\n%kInitializing eMMC...\n", COLOR_WHITE);
-	if (emummc_storage_init_mmc()) {
-		EPRINTF("MMC init failed.");
-		f_close(&fp);
-		goto out;
-	}
-
-	// Parse GPT to find PRODINFO partition
-	gfx_printf("%kParsing GPT...\n", COLOR_WHITE);
-	LIST_INIT(gpt);
-	nx_emmc_gpt_parse(&gpt, &emmc_storage);
-
-	emmc_part_t *prodinfo_part = nx_emmc_part_find(&gpt, "PRODINFO");
-	if (!prodinfo_part) {
-		EPRINTF("PRODINFO not found.");
-		f_close(&fp);
-		nx_emmc_gpt_free(&gpt);
-		goto out;
-	}
-
-	// Initialize BIS encryption for PRODINFO
-	gfx_printf("%kInitializing BIS encryption...\n", COLOR_WHITE);
-	nx_emmc_bis_init(prodinfo_part);
-
-	// Calculate partition size
-	u32 partition_sectors = prodinfo_part->lba_end - prodinfo_part->lba_start + 1;
-	u32 partition_size = partition_sectors * NX_EMMC_BLOCKSIZE;
-
-	gfx_printf("%kPartition size: %d KB (%d sectors)\n", COLOR_CYAN_L, partition_size / 1024, partition_sectors);
-	gfx_printf("%kFile size: %d KB\n", COLOR_CYAN_L, file_size / 1024);
-
-	// Verify file size matches partition
-	if (file_size != partition_size) {
-		gfx_printf("%kSize mismatch! Exp %d, got %d\n", COLOR_RED, partition_size, file_size);
-		f_close(&fp);
-		nx_emmc_gpt_free(&gpt);
-		goto out;
-	}
-
-	// Allocate buffer for writing (256KB at a time)
-	const u32 buf_size = 0x40000; // 256KB
-	u8 *buffer = (u8 *)malloc(buf_size);
-	if (!buffer) {
-		EPRINTF("Buffer alloc failed.");
-		f_close(&fp);
-		nx_emmc_gpt_free(&gpt);
-		goto out;
-	}
-
-	// Restore partition sector by sector with progress
-	u32 progress_y = 0;
-	if (is_encrypted)
-		gfx_printf("\n%kRestoring encrypted PRODINFO (raw write)...\n", COLOR_WHITE);
-	else
-		gfx_printf("\n%kRestoring decrypted PRODINFO (encrypting)...\n", COLOR_WHITE);
-
-	u32 num_sectors_per_write = buf_size / NX_EMMC_BLOCKSIZE;
-	u32 sectors_written = 0;
-	u32 prev_pct = 200;
-	u32 lba_start = prodinfo_part->lba_start;
-
-	while (sectors_written < partition_sectors) {
-		u32 sectors_to_write = MIN(num_sectors_per_write, partition_sectors - sectors_written);
-
-		// Read from file
-		u32 bytes_to_read = sectors_to_write * NX_EMMC_BLOCKSIZE;
-		UINT bytes_read;
-		if (f_read(&fp, buffer, bytes_to_read, &bytes_read) || bytes_read != bytes_to_read) {
-			gfx_printf("%kRead err @ %d\n", COLOR_RED, sectors_written);
-			break;
-		}
-
-		// Write sectors - encrypted files go directly, decrypted files get encrypted
-		if (is_encrypted) {
-			// Write raw encrypted data directly to eMMC
-			if (!sdmmc_storage_write(&emmc_storage, lba_start + sectors_written, sectors_to_write, buffer)) {
-				gfx_printf("%kWrite err @ %d\n", COLOR_RED, sectors_written);
-				break;
-			}
-		} else {
-			// Encrypt decrypted data and write to eMMC
-			if (nx_emmc_bis_write(sectors_written, sectors_to_write, buffer)) {
-				gfx_printf("%kWrite err @ %d\n", COLOR_RED, sectors_written);
-				break;
-			}
-		}
-
-		sectors_written += sectors_to_write;
-
-		// Update progress - save Y position on first update to keep progress stationary
-		u32 pct = (sectors_written * 100) / partition_sectors;
-		if (pct != prev_pct && pct % 5 == 0) {
-			u32 cx, cy;
-			gfx_con_getpos(&cx, &cy);
-			if (progress_y == 0)
-				progress_y = cy;
-			gfx_con_setpos(30, progress_y);
-			gfx_printf("%kProgress: %d%%", COLOR_CYAN_L, pct);
-			prev_pct = pct;
-		}
-	}
-
-	// Cleanup
-	free(buffer);
-	f_close(&fp);
-	nx_emmc_bis_finalize();
-	nx_emmc_gpt_free(&gpt);
-
-	if (sectors_written == partition_sectors) {
-		gfx_printf("\n\n%kPRODINFO restored successfully!\n", COLOR_GREEN);
-		gfx_printf("%kYou should reboot your console now.\n", COLOR_CYAN_L);
-	} else {
-		gfx_printf("\n\n%kRestore incomplete!\n", COLOR_RED);
-		gfx_printf("%kPRODINFO may be corrupt!\n", COLOR_RED);
-	}
-
-out:
-	emummc_storage_end();
-	sd_end();
-
-out_wait:
-	// Wait for button press with hold detection for screenshot
-	u32 vol_press_start = 0;
-	while (true)
-	{
-		Input_t *inp = hidRead();
-		u32 btn = inp->buttons;
-
-		if (btn & (BtnVolP | JoyLUp))
-		{
-			if (vol_press_start == 0)
-				vol_press_start = get_tmr_ms();
-			else if (get_tmr_ms() - vol_press_start > 1000)
-			{
-				// Button held for 1 second - take screenshot
-				int save_fb_to_bmp();
-				int res = save_fb_to_bmp();
-				if (!res)
-					gfx_printf("\n%kScreenshot saved!\n", COLOR_GREEN);
-				else
-					gfx_printf("\n%kScreenshot failed!\n", COLOR_RED);
-
-				msleep(1000);
-
-				// Wait for button release
-				while (hidRead()->buttons & (BtnVolP | JoyLUp))
-					msleep(10);
-
-				// Wait for any button press to return
-				hidWait();
-				break;
-			}
-		}
-		else
-		{
-			vol_press_start = 0;
-			// Any other button pressed - return immediately
-			if (btn)
-				break;
-		}
-
-		msleep(10);
-	}
-}
-
-void dump_mariko_partial_keys()
-{
-	gfx_clear_grey(0x1B);
-	gfx_con_setpos(0, 0);
-
-	if (h_cfg.t210b01) {
-		int res = save_mariko_partial_keys(0, 16, false);
-		if (res == 0 || res == 3)
-		{
-			// Grey out dumping menu items as the keyslots have been invalidated.
-			grey_out_menu_item(&ment_top[0]); // Dump from SysMMC
-			grey_out_menu_item(&ment_top[1]); // Dump from EmuMMC
-			grey_out_menu_item(&ment_top[3]); // Restore PRODINFO
-			grey_out_menu_item(&ment_partials[17]); // Dump Mariko Partials handler (index 17 after new warnings)
-		}
-
-		gfx_printf("\n%kPress a button to return to the menu.", COLOR_CYAN_L);
-		hidWait();
-
-		// Wait for button release to prevent accidental menu navigation
-		while (hidRead()->buttons) msleep(10);
-	}
 }
 
 extern void pivot_stack(u32 stack_top);
@@ -889,7 +751,7 @@ void ipl_main()
 
 	// Mount SD Card.
 	h_cfg.errors |= !sd_mount() ? ERR_SD_BOOT_EN : 0;
-	load_lockpick_configuration();
+	load_netman_configuration();
 
 	// Train DRAM and switch to max frequency.
 	if (minerva_init()) //!TODO: Add Tegra210B01 support to minerva.
@@ -910,33 +772,10 @@ void ipl_main()
 	// Overclock BPMP.
 	bpmp_clk_rate_set(h_cfg.t210b01 ? BPMP_CLK_DEFAULT_BOOST : BPMP_CLK_LOWER_BOOST);
 
-	// Load emuMMC configuration from SD.
-	emummc_load_cfg();
-	// Ignore whether emummc is enabled.
-	h_cfg.emummc_force_disable = emu_cfg.sector == 0 && !emu_cfg.path;
-	emu_cfg.enabled = !h_cfg.emummc_force_disable;
-
-	// Grey out emummc option if not present.
-	if (h_cfg.emummc_force_disable)
-	{
-		grey_out_menu_item(&ment_top[1]); // Dump from EmuMMC
-	}
-
-	// Grey out reboot to RCM option if on Mariko or patched console.
-	if (h_cfg.t210b01 || h_cfg.rcm_patched)
-	{
-		grey_out_menu_item(&ment_top[12]); // Reboot (RCM)
-	}
-
-	// Grey out Mariko partial dump option on Erista.
-	if (!h_cfg.t210b01) {
-		grey_out_menu_item(&ment_top[6]); // Dump Mariko Partials
-	}
-
 	// Grey out reboot to hekate option if no update.bin found.
 	if (f_stat("bootloader/update.bin", NULL))
 	{
-		grey_out_menu_item(&ment_top[9]); // Reboot to hekate
+		grey_out_menu_item(&ment_top[9]); // Back to hekate
 	}
 
 	minerva_change_freq(FREQ_800);

@@ -1,12 +1,36 @@
-.vs
-.vscode
-build/*
-output/*
-research/*
-loader/payload_00.h
-loader/payload_01.h
-tools/bin2c/bin2c
-keygen/tsec_keygen.h
-tools/lz/lz77
-.claude
-releases/
+# Build artifacts
+*.o
+*.elf
+*.bin
+*.a
+*.so
+*.exe
+
+# Build directories
+build/
+output/
+dist/
+
+# Distribution files
+*.zip
+
+# Editor and IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Debug files
+*.log
+*.map
+
+# Temporary files
+tmp/
+temp/

@@ -18,14 +18,13 @@
 #include <mem/heap.h>
 #include <rtc/max77620-rtc.h>
 #include <storage/nx_sd.h>
-#include <utils/util.h>
 #include <utils/sprintf.h>
+#include <utils/util.h>
 
 #include <string.h>
 
 int save_fb_to_bmp()
 {
-	// Disallow screenshots if less than 2s passed.
 	static u32 timer = 0;
 	if (get_tmr_ms() < timer)
 		return 1;
@@ -35,7 +34,6 @@ int save_fb_to_bmp()
 	u32 *fb = malloc(0x384000);
 	u32 *fb_ptr = gfx_ctxt.fb;
 
-	// Reconstruct FB for bottom-top, portrait bmp.
 	for (int y = 1279; y > -1; y--)
 	{
 		for (u32 x = 0; x < 720; x++)
@@ -84,24 +82,19 @@ int save_fb_to_bmp()
 	f_mkdir("sd:/switch");
 	f_mkdir("sd:/switch/screenshot");
 
-	// Generate unique filename with RTC timestamp
 	rtc_time_t time;
 	max77620_rtc_get_time(&time);
 
 	char path[0x80];
-	s_printf(path, "sd:/switch/screenshot/lockpick_rcm_%04d%02d%02d_%02d%02d%02d.bmp",
+	s_printf(path, "sd:/switch/screenshot/netman_%04d%02d%02d_%02d%02d%02d.bmp",
 		time.year, time.month, time.day, time.hour, time.min, time.sec);
 
-	// Save screenshot and log.
 	int res = sd_save_to_file(bitmap, file_size, path);
-
-	// sd_unmount();
 
 	free(bitmap);
 	free(fb);
 
-	// Set timer to 2s.
 	timer = get_tmr_ms() + 2000;
 
-    return res;
+	return res;
 }

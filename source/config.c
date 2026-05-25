@@ -51,10 +51,10 @@ void set_default_configuration()
 	h_cfg.verbose_errors = false;
 }
 
-void load_lockpick_configuration()
+void load_netman_configuration()
 {
 	LIST_INIT(ini_sections);
-	if (!ini_parse(&ini_sections, "config/lockpick_rcm_pro/config.ini", false))
+	if (!ini_parse(&ini_sections, "config/netman/config.ini", false))
 		return;
 
 	LIST_FOREACH_ENTRY(ini_sec_t, ini_sec, &ini_sections, link)

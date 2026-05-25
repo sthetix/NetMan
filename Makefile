@@ -9,29 +9,37 @@ include $(DEVKITARM)/base_rules
 ################################################################################
 
 IPL_LOAD_ADDR := 0x40008000
-MAGIC = 0x4B434F4C #"LOCK"
+MAGIC = 0x594C4648 #"HFLY"
 include ./Versions.inc
 
 ################################################################################
 
-TARGET := Lockpick_RCM_Pro
+TARGET := NetMan
 BUILDDIR := build
 OUTPUTDIR := output
 SOURCEDIR := source
 BDKDIR := bdk
 BDKINC := -I./$(BDKDIR)
-KEYGENDIR := keygen
-KEYGEN := tsec_keygen
-KEYGENH := tsec_keygen.h
 VPATH = $(dir ./$(SOURCEDIR)/) $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*/))
 VPATH += $(dir $(wildcard ./$(BDKDIR)/)) $(dir $(wildcard ./$(BDKDIR)/*/)) $(dir $(wildcard ./$(BDKDIR)/*/*/))
+VPATH += $(dir $(wildcard ./$(BDKDIR)/ianos/elfload/))
 
-OBJS =	$(patsubst $(SOURCEDIR)/%.S, $(BUILDDIR)/$(TARGET)/%.o, \
-		$(patsubst $(SOURCEDIR)/%.c, $(BUILDDIR)/$(TARGET)/%.o, \
-		$(call rwildcard, $(SOURCEDIR), *.S *.c)))
-OBJS +=	$(patsubst $(BDKDIR)/%.S, $(BUILDDIR)/$(TARGET)/%.o, \
-		$(patsubst $(BDKDIR)/%.c, $(BUILDDIR)/$(TARGET)/%.o, \
-		$(call rwildcard, $(BDKDIR), *.S *.c)))
+OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
+	start.o exception_handlers.o \
+	main.o heap.o \
+	gfx.o tui.o config.o hid.o \
+	gui.o joycon.o \
+	nx_sd.o diskio.o ff.o ffunicode.o ffsystem.o \
+)
+
+OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
+	bpmp.o ccplex.o clock.o di.o gpio.o i2c.o irq.o mc.o sdram.o \
+	pinmux.o pmc.o uart.o fuse.o minerva.o hw_init.o \
+	sdmmc.o sdmmc_driver.o \
+	bq24193.o max17050.o max7762x.o max77620-rtc.o regulator_5v.o \
+	se.o ianos.o elfload.o elfreloc_arm.o \
+	btn.o touch.o ini.o sprintf.o util.o dirlist.o \
+)
 
 GFX_INC   := '"../$(SOURCEDIR)/gfx/gfx.h"'
 FFCFG_INC := '"../$(SOURCEDIR)/libs/fatfs/ffconf.h"'
@@ -39,7 +47,7 @@ FFCFG_INC := '"../$(SOURCEDIR)/libs/fatfs/ffconf.h"'
 ################################################################################
 
 CUSTOMDEFINES := -DIPL_LOAD_ADDR=$(IPL_LOAD_ADDR) -DLP_MAGIC=$(MAGIC)
-CUSTOMDEFINES += -DLP_VER_MJ=$(LPVERSION_MAJOR) -DLP_VER_MN=$(LPVERSION_MINOR) -DLP_VER_BF=$(LPVERSION_BUGFX) -DLP_RESERVED=$(LPVERSION_RSVD)
+CUSTOMDEFINES += -DLP_VER_MJ=$(BLVERSION_MAJOR) -DLP_VER_MN=$(BLVERSION_MINOR) -DLP_VER_BF=$(BLVERSION_HOTFX) -DLP_RESERVED=$(BLVERSION_RSVD)
 CUSTOMDEFINES += -DGFX_INC=$(GFX_INC) -DFFCFG_INC=$(FFCFG_INC)
 
 #CUSTOMDEFINES += -DDEBUG
@@ -55,14 +63,9 @@ ARCH := -march=armv4t -mtune=arm7tdmi -mthumb -mthumb-interwork
 CFLAGS = $(ARCH) -Os -g -nostdlib -ffunction-sections -fdata-sections -fomit-frame-pointer -std=gnu11 $(WARNINGS) $(CUSTOMDEFINES)
 LDFLAGS = $(ARCH) -nostartfiles -lgcc -Wl,--nmagic,--gc-sections -Xlinker --defsym=IPL_LOAD_ADDR=$(IPL_LOAD_ADDR)
 
-LDRDIR := $(wildcard loader)
-TOOLSLZ := $(wildcard tools/lz)
-TOOLSB2C := $(wildcard tools/bin2c)
-TOOLS := $(TOOLSLZ) $(TOOLSB2C)
-
 ################################################################################
 
-.PHONY: all clean zip $(LDRDIR) $(TOOLS)
+.PHONY: all clean zip
 
 all: $(OUTPUTDIR)/$(TARGET).bin zip
 	@echo "--------------------------------------"
@@ -80,60 +83,29 @@ all: $(OUTPUTDIR)/$(TARGET).bin zip
 
 zip: $(OUTPUTDIR)/$(TARGET).bin
 	@mkdir -p $(OUTPUTDIR)/zip_temp/bootloader/payloads
-	@mkdir -p $(OUTPUTDIR)/zip_temp/config/lockpick_rcm_pro
 	@cp $(OUTPUTDIR)/$(TARGET).bin $(OUTPUTDIR)/zip_temp/bootloader/payloads/$(TARGET).bin
-	@cp config/lockpick_rcm_pro/config.ini $(OUTPUTDIR)/zip_temp/config/lockpick_rcm_pro/config.ini
-	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip bootloader config
+	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(BLVERSION_MAJOR).$(BLVERSION_MINOR).$(BLVERSION_HOTFX).zip bootloader
 	@rm -rf $(OUTPUTDIR)/zip_temp
-	@echo "Created $(OUTPUTDIR)/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip"
+	@echo "Created $(OUTPUTDIR)/$(TARGET)-$(BLVERSION_MAJOR).$(BLVERSION_MINOR).$(BLVERSION_HOTFX).zip"
 
-clean: $(TOOLS)
+clean:
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(OUTPUTDIR)
 
-$(LDRDIR): $(OUTPUTDIR)/$(TARGET).bin
-	@$(TOOLSLZ)/lz77 $(OUTPUTDIR)/$(TARGET).bin
-	mv $(OUTPUTDIR)/$(TARGET).bin $(OUTPUTDIR)/$(TARGET)_unc.bin
-	@mv $(OUTPUTDIR)/$(TARGET).bin.00.lz payload_00
-	@mv $(OUTPUTDIR)/$(TARGET).bin.01.lz payload_01
-	@$(TOOLSB2C)/bin2c payload_00 > $(LDRDIR)/payload_00.h
-	@$(TOOLSB2C)/bin2c payload_01 > $(LDRDIR)/payload_01.h
-	@rm payload_00
-	@rm payload_01
-	@$(MAKE) --no-print-directory -C $@ $(if $(filter release,$(MAKECMDGOALS)),all,$(MAKECMDGOALS)) -$(MAKEFLAGS) PAYLOAD_NAME=$(TARGET)
-
-$(TOOLS):
-	@$(MAKE) --no-print-directory -C $@ $(if $(filter release,$(MAKECMDGOALS)),all,$(MAKECMDGOALS)) -$(MAKEFLAGS)
-
-$(OUTPUTDIR)/$(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf $(TOOLS)
+$(OUTPUTDIR)/$(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf
 	@mkdir -p "$(@D)"
 	$(OBJCOPY) -S -O binary $< $@
 
 $(BUILDDIR)/$(TARGET)/$(TARGET).elf: $(OBJS)
 	@$(CC) $(LDFLAGS) -T $(SOURCEDIR)/link.ld $^ -o $@
-	@echo "Lockpick RCM Pro was built with the following flags:\nCFLAGS:  "$(CFLAGS)"\nLDFLAGS: "$(LDFLAGS)
+	@echo "NetMan was built with the following flags:\nCFLAGS:  "$(CFLAGS)"\nLDFLAGS: "$(LDFLAGS)
 
-$(OBJS): | $(KEYGENDIR)
-
-$(KEYGENDIR): $(TOOLS)
-	@cd $(KEYGENDIR) && ../$(TOOLSB2C)/bin2c $(KEYGEN) > $(KEYGENH)
-
-$(BUILDDIR)/$(TARGET)/%.o: $(SOURCEDIR)/%.c
+$(BUILDDIR)/$(TARGET)/%.o: %.c
 	@mkdir -p "$(@D)"
 	@echo Building $@
 	@$(CC) $(CFLAGS) $(BDKINC) -c $< -o $@
 
-$(BUILDDIR)/$(TARGET)/%.o: $(SOURCEDIR)/%.S
-	@mkdir -p "$(@D)"
-	@echo Building $@
-	@$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILDDIR)/$(TARGET)/%.o: $(BDKDIR)/%.c
-	@mkdir -p "$(@D)"
-	@echo Building $@
-	@$(CC) $(CFLAGS) $(BDKINC) -c $< -o $@
-
-$(BUILDDIR)/$(TARGET)/%.o: $(BDKDIR)/%.S
+$(BUILDDIR)/$(TARGET)/%.o: %.S
 	@mkdir -p "$(@D)"
 	@echo Building $@
 	@$(CC) $(CFLAGS) -c $< -o $@

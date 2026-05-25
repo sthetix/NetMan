@@ -27,8 +27,7 @@ typedef enum {
 	DRIVE_SD   = 0,
 	DRIVE_RAM  = 1,
 	DRIVE_EMMC = 2,
-	DRIVE_BIS  = 3,
-	DRIVE_EMU  = 4
+	DRIVE_EMU  = 3
 } DDRIVE;
 
 

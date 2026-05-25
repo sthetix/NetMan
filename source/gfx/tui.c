@@ -154,9 +154,9 @@ void *tui_do_menu(menu_t *menu)
 
 			// Draw title bar and bottom bar
 			char title[64];
-			s_printf(title, "[Lockpick RCM Pro v%d.%d.%d]", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
+			s_printf(title, "[NetMan v%d.%d.%d]", LP_VER_MJ, LP_VER_MN, LP_VER_BF);
 			gfx_draw_title_bar(title);
-			gfx_draw_bottom_bar("Joy-Con/Btns: Move   A/Power: Select   Cap+: Screenshot");
+			gfx_draw_bottom_bar("Joy-Con/Btns: Move   A/Power: Select   Hold + : Screenshot");
 
 			// Draw all menu items (use global UI settings)
 			u32 start_x = UI_MENU_START_X;
@@ -233,15 +233,15 @@ void *tui_do_menu(menu_t *menu)
 		// Only process button presses (ignore button releases and repeats)
 		if (btn == btn_last)
 		{
-			// Still check for VOL+ hold (1 second) for screenshot
+			// Still check for VOL+ hold (2 seconds) for screenshot
 			static u32 vol_press_start = 0;
 			if (btn & (BtnVolP | JoyLUp))
 			{
 				if (vol_press_start == 0)
 					vol_press_start = get_tmr_ms();
-				else if (get_tmr_ms() - vol_press_start > 1000)
+				else if (get_tmr_ms() - vol_press_start > 2000)
 				{
-					// Button held for 1 second - take screenshot
+					// Button held for 2 seconds - take screenshot
 					vol_press_start = 0;
 					btn_last = 0; // Reset to allow next button press
 
@@ -258,8 +258,6 @@ void *tui_do_menu(menu_t *menu)
 						gfx_printf("%kScreenshot failed!%k                             ", COLOR_ERROR, COLOR_SOFT_WHITE);
 					}
 					msleep(1000);
-
-					need_full_redraw = 1;
 					continue;
 				}
 			}

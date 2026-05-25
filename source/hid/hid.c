@@ -1,5 +1,5 @@
 /*
- * HID (Human Interface Device) Input Layer for Lockpick RCM Pro
+ * HID (Human Interface Device) Input Layer for NetMan
  * Unified input handling for Joy-Con, touch, and physical buttons
  *
  * Based on TegraExplorer HID implementation
@@ -11,26 +11,14 @@
 #include "../gfx/gfx.h"
 #include <utils/types.h>
 #include <utils/util.h>
-#include <display/di.h>
 #include "../config.h"
 #include <libs/fatfs/ff.h>
-
-// Forward declaration for screenshot function
-extern int save_fb_to_bmp();
 
 static Input_t inputs = {0};
 u16 LbaseX = 0, LbaseY = 0, RbaseX = 0, RbaseY = 0;
 
-// Track previous Capture button state to detect press edge (not hold)
-static bool cap_was_pressed = false;
-
 void hidInit(){
     jc_init_hw();
-
-    // Initialize Capture button state to prevent false trigger on startup
-    jc_gamepad_rpt_t *controller = joycon_poll();
-    if (controller != NULL)
-        cap_was_pressed = controller->cap;
 }
 
 extern hekate_config h_cfg;
@@ -43,25 +31,6 @@ Input_t *hidRead(){
     u8 right_connected = 0;
 
     if (controller != NULL){
-        // Handle Capture button for screenshot - only on press (not hold)
-        // Use edge detection to prevent multiple triggers
-        if (controller->cap && !cap_was_pressed)
-        {
-            // Ensure SD directory exists
-            f_mkdir("sd:/switch");
-            f_mkdir("sd:/switch/screenshot");
-
-            save_fb_to_bmp();
-
-            // Visual feedback - flash brightness (like TegraExplorer)
-            display_backlight_brightness(255, 1000);
-            msleep(100);
-            display_backlight_brightness(h_cfg.backlight, 1000);
-        }
-
-        // Update state for next time
-        cap_was_pressed = controller->cap;
-
         inputs.buttons = controller->buttons;
 
         left_connected = controller->conn_l;

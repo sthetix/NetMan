@@ -1,5 +1,5 @@
 /*
- * HID (Human Interface Device) Input Layer for Lockpick RCM Pro
+ * HID (Human Interface Device) Input Layer for NetMan
  * Unified input handling for Joy-Con, touch, and physical buttons
  *
  * Based on TegraExplorer HID implementation

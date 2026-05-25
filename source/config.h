@@ -21,13 +21,13 @@
 
 // Version fallbacks (set by Makefile, these are defaults)
 #ifndef LP_VER_MJ
-#define LP_VER_MJ 1
+#define LP_VER_MJ 2
 #endif
 #ifndef LP_VER_MN
-#define LP_VER_MN 9
+#define LP_VER_MN 0
 #endif
 #ifndef LP_VER_BF
-#define LP_VER_BF 17
+#define LP_VER_BF 0
 #endif
 
 typedef struct _hekate_config
@@ -51,7 +51,7 @@ typedef struct _hekate_config
 } hekate_config;
 
 void set_default_configuration();
-void load_lockpick_configuration();
+void load_netman_configuration();
 int create_config_entry();
 void config_autoboot();
 void config_bootdelay();
