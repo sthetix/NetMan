@@ -26,10 +26,11 @@ NetMan updates Atmosphere configuration files on the SD card:
 - `atmosphere/hosts/sysmmc.txt`
 - `atmosphere/hosts/default.txt`
 - `atmosphere/config/system_settings.ini`
+- `config/sys-patch/config.ini`
 
-When sysMMC blocking is enabled, NetMan blanks sysMMC PRODINFO through exosphere settings, writes Nintendo server blocking rules for sysMMC, enables DNS MITM, disables default DNS blocking, and enables firmware update blocking patches.
+When sysMMC blocking is enabled, NetMan blanks sysMMC PRODINFO through exosphere settings, writes Nintendo server blocking rules for sysMMC, enables DNS MITM, disables default DNS blocking, and enables sys-patch network and firmware update blocking patches.
 
-When sysMMC is unblocked, NetMan disables sysMMC PRODINFO blanking, clears the sysMMC Nintendo hosts block, keeps DNS MITM enabled with defaults disabled, and disables firmware update blocking patches.
+When sysMMC is unblocked, NetMan disables sysMMC PRODINFO blanking, clears the sysMMC Nintendo hosts block, keeps DNS MITM enabled with defaults disabled, keeps sys-patch network patches enabled, and allows firmware updates again.
 
 ## Current Scope
 
