@@ -5,7 +5,7 @@
 NetMan currently focuses on one job: quickly switching sysMMC between a blocked and unblocked network configuration from RCM.
 
 <div align="center">
-  <img src="images/preview.bmp" alt="NetMan Interface" width="50%">
+  <img src="images/preview.bmp" alt="NetMan Interface" width="100%">
   <br>
   <em>NetMan's simple sysMMC network controls</em>
 </div>
