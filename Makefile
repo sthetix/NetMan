@@ -80,8 +80,10 @@ all: $(OUTPUTDIR)/$(TARGET).bin zip
 
 zip: $(OUTPUTDIR)/$(TARGET).bin
 	@mkdir -p $(OUTPUTDIR)/zip_temp/bootloader/payloads
+	@mkdir -p $(OUTPUTDIR)/zip_temp/config/lockpick_rcm_pro
 	@cp $(OUTPUTDIR)/$(TARGET).bin $(OUTPUTDIR)/zip_temp/bootloader/payloads/$(TARGET).bin
-	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip bootloader
+	@cp config/lockpick_rcm_pro/config.ini $(OUTPUTDIR)/zip_temp/config/lockpick_rcm_pro/config.ini
+	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip bootloader config
 	@rm -rf $(OUTPUTDIR)/zip_temp
 	@echo "Created $(OUTPUTDIR)/$(TARGET)-$(LPVERSION_MAJOR).$(LPVERSION_MINOR).$(LPVERSION_BUGFX).zip"
 

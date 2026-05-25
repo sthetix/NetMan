@@ -34,6 +34,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "save.h"
 
+#include "../../../source/config.h"
 #include <gfx_utils.h>
 #include <mem/heap.h>
 #include <rtc/max77620-rtc.h>
@@ -44,6 +45,8 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include <stdlib.h>
 #include <string.h>
+
+extern hekate_config h_cfg;
 
 static void save_init_journal_ivfc_storage(save_ctx_t *ctx, hierarchical_integrity_verification_storage_ctx_t *out_ivfc, int integrity_check_level) {
     const uint32_t ivfc_levels = 5;
@@ -91,7 +94,6 @@ static bool save_process_header(save_ctx_t *ctx) {
         ctx->header.save_header.magic != MAGIC_SAVE || ctx->header.main_remap_header.magic != MAGIC_RMAP ||
         ctx->header.meta_remap_header.magic != MAGIC_RMAP)
     {
-        EPRINTF("Error: Save header is corrupt!");
         return false;
     }
 
@@ -130,18 +132,21 @@ bool save_process(save_ctx_t *ctx) {
         return false;
     }
 
-    if (!save_process_header(ctx) || (ctx->header_hash_validity == VALIDITY_INVALID)) {
+    if (!save_process_header(ctx) || (ctx->header_cmac_validity == VALIDITY_INVALID)) {
         /* Try to parse Header B. */
         if (substorage_read(&ctx->base_storage, &ctx->header, sizeof(ctx->header), sizeof(ctx->header)) != sizeof(ctx->header)) {
             EPRINTF("Failed to read save header B!\n");
             return false;
         }
 
-        if (!save_process_header(ctx) || (ctx->header_hash_validity == VALIDITY_INVALID)) {
+        if (!save_process_header(ctx) || (ctx->header_cmac_validity == VALIDITY_INVALID)) {
             EPRINTF("Error: Save header is invalid!");
             return false;
         }
     }
+
+    if (h_cfg.verbose_errors && ctx->header_hash_validity == VALIDITY_INVALID)
+        EPRINTF("Save header hash mismatch; accepting valid CMAC header.");
 
     if (ctx->header.layout.version > VERSION_DISF_5) {
         EPRINTF("Unsupported save version.\nLibrary must be updated.");

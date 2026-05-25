@@ -16,12 +16,15 @@
 
 #include "cal0_read.h"
 
+#include "../config.h"
 #include <gfx_utils.h>
 #include <sec/se.h>
 #include <sec/se_t210.h>
 #include "../storage/emummc.h"
 #include "../storage/nx_emmc.h"
 #include <utils/util.h>
+
+extern hekate_config h_cfg;
 
 bool cal0_read(u32 tweak_ks, u32 crypt_ks, void *read_buffer) {
     nx_emmc_cal0_t *cal0 = (nx_emmc_cal0_t *)read_buffer;
@@ -64,7 +67,8 @@ bool cal0_get_ssl_rsa_key(const nx_emmc_cal0_t *cal0, const void **out_key, u32 
         *out_iv = cal0->ssl_key_iv;
         *out_generation = 0;
     } else {
-        EPRINTF("Crc16 error reading device key.");
+        if (h_cfg.verbose_errors)
+            EPRINTF("CAL0 SSL RSA key CRC16 validation failed.");
         return false;
     }
     return true;
@@ -89,7 +93,8 @@ bool cal0_get_eticket_rsa_key(const nx_emmc_cal0_t *cal0, const void **out_key, 
         *out_iv = cal0->rsa2048_eticket_key_iv;
         *out_generation = 0;
     } else {
-        EPRINTF("Crc16 error reading device key.");
+        if (h_cfg.verbose_errors)
+            EPRINTF("CAL0 eTicket RSA key CRC16 validation failed.");
         return false;
     }
     return true;

@@ -48,4 +48,25 @@ void set_default_configuration()
 	h_cfg.rcm_patched = fuse_check_patched_rcm();
 	h_cfg.emummc_force_disable = false;
 	h_cfg.t210b01 = hw_get_chip_id() == GP_HIDREV_MAJOR_T210B01;
+	h_cfg.verbose_errors = false;
+}
+
+void load_lockpick_configuration()
+{
+	LIST_INIT(ini_sections);
+	if (!ini_parse(&ini_sections, "config/lockpick_rcm_pro/config.ini", false))
+		return;
+
+	LIST_FOREACH_ENTRY(ini_sec_t, ini_sec, &ini_sections, link)
+	{
+		if (ini_sec->type != INI_CHOICE || strcmp(ini_sec->name, "debug"))
+			continue;
+
+		LIST_FOREACH_ENTRY(ini_kv_t, kv, &ini_sec->kvs, link)
+		{
+			if (!strcmp("verbose_errors", kv->key))
+				h_cfg.verbose_errors = atoi(kv->val) != 0;
+		}
+		break;
+	}
 }

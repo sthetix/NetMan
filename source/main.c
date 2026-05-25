@@ -889,6 +889,7 @@ void ipl_main()
 
 	// Mount SD Card.
 	h_cfg.errors |= !sd_mount() ? ERR_SD_BOOT_EN : 0;
+	load_lockpick_configuration();
 
 	// Train DRAM and switch to max frequency.
 	if (minerva_init()) //!TODO: Add Tegra210B01 support to minerva.

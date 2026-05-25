@@ -46,10 +46,12 @@ typedef struct _hekate_config
 	bool aes_slots_new;
 	bool emummc_force_disable;
 	bool rcm_patched;
+	bool verbose_errors;
 	u32  errors;
 } hekate_config;
 
 void set_default_configuration();
+void load_lockpick_configuration();
 int create_config_entry();
 void config_autoboot();
 void config_bootdelay();
