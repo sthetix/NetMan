@@ -83,8 +83,12 @@ all: $(OUTPUTDIR)/$(TARGET).bin zip
 
 zip: $(OUTPUTDIR)/$(TARGET).bin
 	@mkdir -p $(OUTPUTDIR)/zip_temp/bootloader/payloads
+	@mkdir -p $(OUTPUTDIR)/zip_temp/config/netman/tce/1.11.2
 	@cp $(OUTPUTDIR)/$(TARGET).bin $(OUTPUTDIR)/zip_temp/bootloader/payloads/$(TARGET).bin
-	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(BLVERSION_MAJOR).$(BLVERSION_MINOR).$(BLVERSION_HOTFX).zip bootloader
+	@cp asset/modded_package3/1.11.2/package3 $(OUTPUTDIR)/zip_temp/config/netman/tce/1.11.2/package3
+	@cp asset/tcm/emummc.bmp $(OUTPUTDIR)/zip_temp/config/netman/tce/emummc.bmp
+	@cp asset/tcm/sysmmc.bmp $(OUTPUTDIR)/zip_temp/config/netman/tce/sysmmc.bmp
+	@cd $(OUTPUTDIR)/zip_temp && zip -r ../$(TARGET)-$(BLVERSION_MAJOR).$(BLVERSION_MINOR).$(BLVERSION_HOTFX).zip bootloader config
 	@rm -rf $(OUTPUTDIR)/zip_temp
 	@echo "Created $(OUTPUTDIR)/$(TARGET)-$(BLVERSION_MAJOR).$(BLVERSION_MINOR).$(BLVERSION_HOTFX).zip"
 

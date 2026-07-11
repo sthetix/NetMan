@@ -33,6 +33,8 @@
 #include <power/max17050.h>
 #include <power/max77620.h>
 #include <rtc/max77620-rtc.h>
+#include <sec/se.h>
+#include <sec/se_t210.h>
 #include <soc/bpmp.h>
 #include <soc/hw_init.h>
 #include <storage/nx_sd.h>
@@ -302,6 +304,17 @@ void launch_hekate()
 #define HOSTS_SYSMMC_PATH "sd:/atmosphere/hosts/sysmmc.txt"
 #define SYS_SETTINGS_PATH "sd:/atmosphere/config/system_settings.ini"
 #define SYS_PATCH_CONFIG_PATH "sd:/config/sys-patch/config.ini"
+#define PACKAGE3_PATH "sd:/atmosphere/package3"
+#define BOOTLOGO_EMUMMC_PATH "sd:/bootloader/res/emummc.bmp"
+#define BOOTLOGO_SYSMMC_PATH "sd:/bootloader/res/sysmmc.bmp"
+#define TINFOIL_ATMOSPHERE_VERSION "1.11.2"
+#define TINFOIL_PACKAGE3_PATH "sd:/config/netman/tce/1.11.2/package3"
+#define TINFOIL_EMUMMC_PATH "sd:/config/netman/tce/emummc.bmp"
+#define TINFOIL_SYSMMC_PATH "sd:/config/netman/tce/sysmmc.bmp"
+#define TINFOIL_BACKUP_PACKAGE3_PATH "sd:/config/netman/tce/backup/package3"
+#define TINFOIL_BACKUP_EMUMMC_PATH "sd:/config/netman/tce/backup/emummc.bmp"
+#define TINFOIL_BACKUP_SYSMMC_PATH "sd:/config/netman/tce/backup/sysmmc.bmp"
+#define TINFOIL_STATE_PATH "sd:/config/netman/tce/state.ini"
 
 const char *hosts_block_all =
 "# Nintendo Servers\n"
@@ -389,7 +402,44 @@ const char *sys_settings_both_online =
 "enable_dns_mitm = u8!0x0\n"
 "add_defaults_to_dns_hosts = u8!0x0\n";
 
+static const u8 package3_stock_sha256[SE_SHA_256_SIZE] = {
+	0xF1, 0x62, 0xA4, 0x19, 0x88, 0x73, 0x74, 0x02,
+	0x81, 0x03, 0xE0, 0x97, 0xDC, 0x56, 0x79, 0xF9,
+	0x7B, 0x3B, 0x22, 0x50, 0x1F, 0xEE, 0x66, 0x74,
+	0x05, 0xA3, 0xBC, 0x96, 0x5E, 0xEA, 0xA3, 0xF2
+};
+
+static const u8 package3_tinfoil_sha256[SE_SHA_256_SIZE] = {
+	0xFC, 0x0B, 0x59, 0x20, 0x4A, 0xF2, 0x5B, 0x23,
+	0x49, 0x2D, 0x1A, 0x1C, 0x69, 0x3A, 0xAA, 0x19,
+	0xEF, 0xB1, 0xE9, 0x2E, 0x8F, 0x92, 0x96, 0x41,
+	0x30, 0x72, 0x21, 0x01, 0x66, 0x89, 0x39, 0x1C
+};
+
+static const u8 emummc_tinfoil_sha256[SE_SHA_256_SIZE] = {
+	0x78, 0x09, 0x76, 0xEB, 0xC7, 0xAE, 0x69, 0x74,
+	0x08, 0x74, 0xEE, 0x97, 0x84, 0x88, 0x90, 0x80,
+	0x27, 0xFA, 0x2A, 0xA0, 0x84, 0x72, 0xB3, 0x10,
+	0x1E, 0x11, 0x53, 0x65, 0x9B, 0x8B, 0x03, 0x81
+};
+
+static const u8 sysmmc_tinfoil_sha256[SE_SHA_256_SIZE] = {
+	0x8A, 0x66, 0x70, 0xD4, 0xF4, 0xE1, 0xD4, 0x0D,
+	0x34, 0x60, 0x15, 0x32, 0x34, 0x79, 0x43, 0x7C,
+	0xDD, 0x79, 0xDF, 0xDB, 0xB1, 0x8F, 0x88, 0x02,
+	0xB7, 0x91, 0x7F, 0xE9, 0xB2, 0xC3, 0xBD, 0xF0
+};
+
 static bool save_file(const char *path, const char *data, u32 size);
+static bool copy_file(const char *src_path, const char *dst_path);
+static bool file_sha256(const char *path, u8 *hash);
+static bool hash_matches(const u8 *hash, const u8 *expected);
+static bool file_hash_matches(const char *path, const u8 *expected);
+static bool files_hash_match(const char *first_path, const char *second_path);
+static const char *backup_file_if_needed(const char *src_path, const char *backup_path);
+static const char *restore_backup_file(const char *backup_path, const char *dst_path);
+static bool sysmmc_blocked_config_applied();
+static bool sysmmc_online_config_applied();
 
 static bool save_sys_patch_config(bool enable_network_patches, bool block_firmware_updates)
 {
@@ -448,6 +498,130 @@ static bool save_file(const char *path, const char *data, u32 size)
 
 	f_close(&fp);
 	return true;
+}
+
+static bool copy_file(const char *src_path, const char *dst_path)
+{
+	FIL src;
+	if (f_open(&src, src_path, FA_READ))
+	{
+		EPRINTFARGS("Failed to open %s for reading!", src_path);
+		return false;
+	}
+
+	FIL dst;
+	if (f_open(&dst, dst_path, FA_CREATE_ALWAYS | FA_WRITE))
+	{
+		f_close(&src);
+		EPRINTFARGS("Failed to open %s for writing!", dst_path);
+		return false;
+	}
+
+	u8 *buf = malloc(0x4000);
+	if (!buf)
+	{
+		f_close(&dst);
+		f_close(&src);
+		EPRINTF("Failed to allocate file copy buffer!");
+		return false;
+	}
+
+	bool result = true;
+	while (true)
+	{
+		UINT br = 0;
+		if (f_read(&src, buf, 0x4000, &br))
+		{
+			EPRINTFARGS("Failed to read from %s!", src_path);
+			result = false;
+			break;
+		}
+
+		if (!br)
+			break;
+
+		UINT bw = 0;
+		if (f_write(&dst, buf, br, &bw) || bw != br)
+		{
+			EPRINTFARGS("Failed to write to %s!", dst_path);
+			result = false;
+			break;
+		}
+	}
+
+	free(buf);
+	f_close(&dst);
+	f_close(&src);
+	return result;
+}
+
+static bool file_sha256(const char *path, u8 *hash)
+{
+	FIL fp;
+	if (f_open(&fp, path, FA_READ))
+		return false;
+
+	u32 size = f_size(&fp);
+	void *buf = malloc(size);
+	if (!buf)
+	{
+		f_close(&fp);
+		return false;
+	}
+
+	UINT br;
+	bool result = true;
+	if (f_read(&fp, buf, size, &br) || br != size)
+		result = false;
+	else if (!se_calc_sha256_oneshot(hash, buf, size))
+		result = false;
+
+	free(buf);
+	f_close(&fp);
+	return result;
+}
+
+static bool hash_matches(const u8 *hash, const u8 *expected)
+{
+	return memcmp(hash, expected, SE_SHA_256_SIZE) == 0;
+}
+
+static bool file_hash_matches(const char *path, const u8 *expected)
+{
+	u8 hash[SE_SHA_256_SIZE];
+	return file_sha256(path, hash) && hash_matches(hash, expected);
+}
+
+static bool files_hash_match(const char *first_path, const char *second_path)
+{
+	u8 first_hash[SE_SHA_256_SIZE];
+	u8 second_hash[SE_SHA_256_SIZE];
+
+	return file_sha256(first_path, first_hash)
+		&& file_sha256(second_path, second_hash)
+		&& hash_matches(first_hash, second_hash);
+}
+
+static const char *backup_file_if_needed(const char *src_path, const char *backup_path)
+{
+	if (!f_stat(backup_path, NULL))
+		return "Existing";
+
+	if (f_stat(src_path, NULL))
+		return "Original missing";
+
+	return copy_file(src_path, backup_path) ? "Saved" : "Failed";
+}
+
+static const char *restore_backup_file(const char *backup_path, const char *dst_path)
+{
+	if (f_stat(backup_path, NULL))
+		return "Backup missing";
+
+	if (files_hash_match(backup_path, dst_path))
+		return "Already original";
+
+	return copy_file(backup_path, dst_path) ? "Restored" : "Failed";
 }
 
 static char *read_file(const char *path)
@@ -509,6 +683,60 @@ static bool update_dns_mitm_settings(bool enable_mitm, bool enable_defaults)
 	bool result = save_file(SYS_SETTINGS_PATH, content, strlen(content));
 	free(content);
 	return result;
+}
+
+static bool sysmmc_blocked_config_applied()
+{
+	bool applied = false;
+	char *exosphere = read_file(EXOSPHERE_PATH);
+	char *hosts = read_file(HOSTS_SYSMMC_PATH);
+	char *settings = read_file(SYS_SETTINGS_PATH);
+	char *sys_patch = read_file(SYS_PATCH_CONFIG_PATH);
+
+	if (exosphere && hosts && settings && sys_patch)
+	{
+		applied =
+			strstr(exosphere, "blank_prodinfo_sysmmc=1") != NULL &&
+			strstr(hosts, "127.0.0.1 *nintendo.*") != NULL &&
+			strstr(settings, "enable_dns_mitm = u8!0x1") != NULL &&
+			strstr(settings, "add_defaults_to_dns_hosts = u8!0x0") != NULL &&
+			strstr(sys_patch, "olsc_19.0.0+=1") != NULL &&
+			strstr(sys_patch, "ctest_20.0.0+=1") != NULL &&
+			strstr(sys_patch, "blockfirmwareupdates_12.0.0+=1") != NULL;
+	}
+
+	free(exosphere);
+	free(hosts);
+	free(settings);
+	free(sys_patch);
+	return applied;
+}
+
+static bool sysmmc_online_config_applied()
+{
+	bool applied = false;
+	char *exosphere = read_file(EXOSPHERE_PATH);
+	char *hosts = read_file(HOSTS_SYSMMC_PATH);
+	char *settings = read_file(SYS_SETTINGS_PATH);
+	char *sys_patch = read_file(SYS_PATCH_CONFIG_PATH);
+
+	if (exosphere && hosts && settings && sys_patch)
+	{
+		applied =
+			strstr(exosphere, "blank_prodinfo_sysmmc=0") != NULL &&
+			strstr(hosts, "# No Nintendo server blocks") != NULL &&
+			strstr(settings, "enable_dns_mitm = u8!0x1") != NULL &&
+			strstr(settings, "add_defaults_to_dns_hosts = u8!0x0") != NULL &&
+			strstr(sys_patch, "olsc_19.0.0+=1") != NULL &&
+			strstr(sys_patch, "ctest_20.0.0+=1") != NULL &&
+			strstr(sys_patch, "blockfirmwareupdates_12.0.0+=0") != NULL;
+	}
+
+	free(exosphere);
+	free(hosts);
+	free(settings);
+	free(sys_patch);
+	return applied;
 }
 
 static void draw_netman_screen(const char *subtitle)
@@ -580,6 +808,12 @@ void set_default_config()
 		goto out;
 	}
 
+	if (sysmmc_blocked_config_applied())
+	{
+		gfx_printf("%ksysMMC Nintendo connectivity is already blocked.\n", COLOR_GREEN);
+		goto out;
+	}
+
 	f_mkdir("sd:/atmosphere");
 	f_mkdir("sd:/atmosphere/hosts");
 	f_mkdir("sd:/atmosphere/config");
@@ -602,6 +836,18 @@ out:
 void set_sysmmc_online()
 {
 	draw_netman_screen("Allowing sysMMC");
+	if (!sd_mount())
+	{
+		EPRINTF("Failed to mount SD card!");
+		goto out;
+	}
+
+	if (sysmmc_online_config_applied())
+	{
+		gfx_printf("%ksysMMC Nintendo connectivity is already allowed.\n", COLOR_GREEN);
+		goto out;
+	}
+
 	gfx_printf("%kWARNING: sysMMC CFW will connect to Nintendo.\n", COLOR_RED);
 	gfx_printf("%kPress VOL+ to continue or any other button to cancel.\n\n", COLOR_WHITE);
 
@@ -609,16 +855,10 @@ void set_sysmmc_online()
 	if (!(inp->buttons & (BtnVolP | JoyLUp)))
 	{
 		gfx_printf("%kCancelled.\n", COLOR_WHITE);
-		wait_for_return();
-		return;
+		goto out;
 	}
 
 	draw_netman_screen("Allowing sysMMC");
-	if (!sd_mount())
-	{
-		EPRINTF("Failed to mount SD card!");
-		goto out;
-	}
 
 	f_mkdir("sd:/atmosphere");
 	f_mkdir("sd:/atmosphere/hosts");
@@ -633,6 +873,173 @@ void set_sysmmc_online()
 	gfx_printf("sys-patch net patches: %s\n", save_sys_patch_config(true, false) ? "ON, updates allowed" : "Failed");
 	gfx_printf("Firmware update block: OFF\n");
 	gfx_printf("\n%ksysMMC can connect to Nintendo servers.\n", COLOR_GREEN);
+
+out:
+	sd_end();
+	wait_for_return();
+}
+
+void apply_tinfoil_compatibility()
+{
+	draw_netman_screen("Tinfoil Compatibility");
+	gfx_printf("%kThis will replace Atmosphere package3.\n", COLOR_RED);
+	gfx_printf("%kOnly Atmosphere " TINFOIL_ATMOSPHERE_VERSION " package3 is accepted.\n", COLOR_WHITE);
+	gfx_printf("%kPress VOL+ to continue or any other button to cancel.\n\n", COLOR_WHITE);
+
+	Input_t *inp = hidWait();
+	if (!(inp->buttons & (BtnVolP | JoyLUp)))
+	{
+		gfx_printf("%kCancelled.\n", COLOR_WHITE);
+		wait_for_return();
+		return;
+	}
+
+	draw_netman_screen("Tinfoil Compatibility");
+	if (!sd_mount())
+	{
+		EPRINTF("Failed to mount SD card!");
+		goto out;
+	}
+
+	f_mkdir("sd:/config");
+	f_mkdir("sd:/config/netman");
+	f_mkdir("sd:/config/netman/tce");
+	f_mkdir("sd:/config/netman/tce/backup");
+	f_mkdir("sd:/atmosphere");
+	f_mkdir("sd:/bootloader");
+	f_mkdir("sd:/bootloader/res");
+
+	u8 live_hash[SE_SHA_256_SIZE];
+	u8 tinfoil_hash[SE_SHA_256_SIZE];
+
+	gfx_printf("%kVerifying package3 pair...\n\n", COLOR_WHITE);
+	if (!file_sha256(PACKAGE3_PATH, live_hash))
+	{
+		gfx_printf("%kInstalled package3: Could not read\n", COLOR_ERROR);
+		goto out;
+	}
+
+	if (hash_matches(live_hash, package3_tinfoil_sha256))
+	{
+		gfx_printf("%kTinfoil Compatibility already appears applied.\n", COLOR_GREEN);
+		goto out;
+	}
+
+	if (!hash_matches(live_hash, package3_stock_sha256))
+	{
+		gfx_printf("%kInstalled package3: Unknown or unsupported\n", COLOR_ERROR);
+		gfx_printf("%kTinfoil Compatibility was not applied.\n", COLOR_WHITE);
+		goto out;
+	}
+
+	if (!file_sha256(TINFOIL_PACKAGE3_PATH, tinfoil_hash))
+	{
+		gfx_printf("%kBundled Tinfoil package3: Could not read\n", COLOR_ERROR);
+		goto out;
+	}
+
+	if (!hash_matches(tinfoil_hash, package3_tinfoil_sha256))
+	{
+		gfx_printf("%kBundled Tinfoil package3: Hash mismatch\n", COLOR_ERROR);
+		gfx_printf("%kTinfoil Compatibility was not applied.\n", COLOR_WHITE);
+		goto out;
+	}
+
+	if (!file_hash_matches(TINFOIL_EMUMMC_PATH, emummc_tinfoil_sha256))
+	{
+		gfx_printf("%kBundled emummc.bmp: Hash mismatch\n", COLOR_ERROR);
+		gfx_printf("%kTinfoil Compatibility was not applied.\n", COLOR_WHITE);
+		goto out;
+	}
+
+	if (!file_hash_matches(TINFOIL_SYSMMC_PATH, sysmmc_tinfoil_sha256))
+	{
+		gfx_printf("%kBundled sysmmc.bmp: Hash mismatch\n", COLOR_ERROR);
+		gfx_printf("%kTinfoil Compatibility was not applied.\n", COLOR_WHITE);
+		goto out;
+	}
+
+	gfx_printf("Installed package3: %kAtmosphere " TINFOIL_ATMOSPHERE_VERSION " stock\n", COLOR_GREEN);
+	gfx_printf("%kBundled package3: Tinfoil compatible\n\n", COLOR_GREEN);
+
+	const char *package3_backup = backup_file_if_needed(PACKAGE3_PATH, TINFOIL_BACKUP_PACKAGE3_PATH);
+	const char *emummc_backup = backup_file_if_needed(BOOTLOGO_EMUMMC_PATH, TINFOIL_BACKUP_EMUMMC_PATH);
+	const char *sysmmc_backup = backup_file_if_needed(BOOTLOGO_SYSMMC_PATH, TINFOIL_BACKUP_SYSMMC_PATH);
+
+	gfx_printf("Backup package3: %s\n", package3_backup);
+	gfx_printf("Backup emummc.bmp: %s\n", emummc_backup);
+	gfx_printf("Backup sysmmc.bmp: %s\n", sysmmc_backup);
+
+	if (!strcmp(package3_backup, "Failed") || !strcmp(package3_backup, "Original missing")
+		|| !strcmp(emummc_backup, "Failed") || !strcmp(emummc_backup, "Original missing")
+		|| !strcmp(sysmmc_backup, "Failed") || !strcmp(sysmmc_backup, "Original missing"))
+	{
+		gfx_printf("\n%kTinfoil Compatibility was not applied.\n", COLOR_ERROR);
+		goto out;
+	}
+
+	gfx_printf("\nApplying replacements...\n");
+	bool emummc_ok = copy_file(TINFOIL_EMUMMC_PATH, BOOTLOGO_EMUMMC_PATH);
+	bool sysmmc_ok = copy_file(TINFOIL_SYSMMC_PATH, BOOTLOGO_SYSMMC_PATH);
+	bool package3_skipped = !emummc_ok || !sysmmc_ok;
+	bool package3_ok = !package3_skipped && copy_file(TINFOIL_PACKAGE3_PATH, PACKAGE3_PATH);
+
+	gfx_printf("emummc.bmp: %s\n", emummc_ok ? "Applied" : "Failed");
+	gfx_printf("sysmmc.bmp: %s\n", sysmmc_ok ? "Applied" : "Failed");
+	gfx_printf("package3: %s\n", package3_ok ? "Applied" : (package3_skipped ? "Skipped" : "Failed"));
+
+	if (package3_ok && emummc_ok && sysmmc_ok)
+	{
+		const char *state =
+			"[tinfoil_compatibility]\n"
+			"enabled=1\n"
+			"atmosphere_version=" TINFOIL_ATMOSPHERE_VERSION "\n";
+		save_file(TINFOIL_STATE_PATH, state, strlen(state));
+		gfx_printf("\n%kTinfoil Compatibility applied.\n", COLOR_GREEN);
+	}
+	else
+		gfx_printf("\n%kTinfoil Compatibility did not fully apply.\n", COLOR_WARNING);
+
+out:
+	sd_end();
+	wait_for_return();
+}
+
+void restore_original_package3()
+{
+	draw_netman_screen("Restore Original");
+
+	if (!sd_mount())
+	{
+		EPRINTF("Failed to mount SD card!");
+		goto out;
+	}
+
+	gfx_printf("%kRestoring original package3 and BMP files.\n\n", COLOR_WHITE);
+
+	const char *package3_restore = restore_backup_file(TINFOIL_BACKUP_PACKAGE3_PATH, PACKAGE3_PATH);
+	const char *emummc_restore = restore_backup_file(TINFOIL_BACKUP_EMUMMC_PATH, BOOTLOGO_EMUMMC_PATH);
+	const char *sysmmc_restore = restore_backup_file(TINFOIL_BACKUP_SYSMMC_PATH, BOOTLOGO_SYSMMC_PATH);
+
+	gfx_printf("package3: %s\n", package3_restore);
+	gfx_printf("emummc.bmp: %s\n", emummc_restore);
+	gfx_printf("sysmmc.bmp: %s\n", sysmmc_restore);
+
+	bool package3_ok = !strcmp(package3_restore, "Restored") || !strcmp(package3_restore, "Already original");
+	bool emummc_ok = !strcmp(emummc_restore, "Restored") || !strcmp(emummc_restore, "Already original");
+	bool sysmmc_ok = !strcmp(sysmmc_restore, "Restored") || !strcmp(sysmmc_restore, "Already original");
+
+	if (package3_ok && emummc_ok && sysmmc_ok)
+	{
+		const char *state =
+			"[tinfoil_compatibility]\n"
+			"enabled=0\n"
+			"atmosphere_version=" TINFOIL_ATMOSPHERE_VERSION "\n";
+		save_file(TINFOIL_STATE_PATH, state, strlen(state));
+		gfx_printf("\n%kOriginal files restored.\n", COLOR_GREEN);
+	}
+	else
+		gfx_printf("\n%kOriginal files did not fully restore.\n", COLOR_WARNING);
 
 out:
 	sd_end();
@@ -663,6 +1070,13 @@ void show_current_config()
 	else
 		gfx_printf("Nintendo servers: %kBLOCKED\n", COLOR_GREEN);
 
+	if (sysmmc_blocked_config_applied())
+		gfx_printf("%kNetMan profile: BLOCKED applied\n", COLOR_GREEN);
+	else if (sysmmc_online_config_applied())
+		gfx_printf("%kNetMan profile: ALLOWED applied\n", COLOR_RED);
+	else
+		gfx_printf("%kNetMan profile: Partial or unknown\n", COLOR_WARNING);
+
 	buf = read_file(SYS_SETTINGS_PATH);
 	if (buf)
 	{
@@ -692,6 +1106,20 @@ void show_current_config()
 	else
 		gfx_printf("\n%ksys-patch: Could not read status\n", COLOR_WARNING);
 
+	u8 package3_hash[SE_SHA_256_SIZE];
+	gfx_printf("\n%kTinfoil Compatibility\n", COLOR_WHITE);
+	if (file_sha256(PACKAGE3_PATH, package3_hash))
+	{
+		if (hash_matches(package3_hash, package3_tinfoil_sha256))
+			gfx_printf("Status: %kAPPLIED\n", COLOR_GREEN);
+		else if (hash_matches(package3_hash, package3_stock_sha256))
+			gfx_printf("Status: ORIGINAL\n");
+		else
+			gfx_printf("Status: %kUNKNOWN package3\n", COLOR_WARNING);
+	}
+	else
+		gfx_printf("Status: %kCould not read package3\n", COLOR_WARNING);
+
 out:
 	sd_end();
 	wait_for_return();
@@ -708,6 +1136,10 @@ ment_t ment_top[] = {
 	MDEF_CAPTION("--- sysMMC Connectivity ---", COLOR_WHITE),
 	MDEF_HANDLER("Block Nintendo Connectivity", set_default_config, COLOR_TURQUOISE),
 	MDEF_HANDLER("Allow Nintendo Connectivity", set_sysmmc_online, COLOR_TURQUOISE),
+	MDEF_CHGLINE(),
+	MDEF_CAPTION("--- Tinfoil Compatibility 1.11.2 ---", COLOR_WHITE),
+	MDEF_HANDLER("Apply Tinfoil Compatibility 1.11.2", apply_tinfoil_compatibility, COLOR_TURQUOISE),
+	MDEF_HANDLER("Restore Original Package3", restore_original_package3, COLOR_TURQUOISE),
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("--- Information ---", COLOR_WHITE),
 	MDEF_HANDLER("View Current Status", show_current_config, COLOR_TURQUOISE),
@@ -775,7 +1207,7 @@ void ipl_main()
 	// Grey out reboot to hekate option if no update.bin found.
 	if (f_stat("bootloader/update.bin", NULL))
 	{
-		grey_out_menu_item(&ment_top[9]); // Back to hekate
+		grey_out_menu_item(&ment_top[13]); // Back to hekate
 	}
 
 	minerva_change_freq(FREQ_800);
